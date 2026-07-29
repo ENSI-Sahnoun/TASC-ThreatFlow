@@ -1,0 +1,169 @@
+// Post-sync pass. Rebuilds everything that is DERIVED from items — never touches item rows
+// except to set their confidence. Safe to run repeatedly; each rebuild is a full replace.
+const { clusterItems } = require('./cluster');
+const { computeConfidence } = require('./confidence');
+const { severityFromScore, canonicalSeverity } = require('./cvss');
+
+// CVSS precedence, most authoritative first. NVD is the reference scorer; vendors score
+// their own product's context and legitimately disagree, which is why cve_sources keeps
+// every number rather than averaging them.
+const SOURCE_RANK = [
+  'NVD CVE API',
+  'Red Hat Security Data',
+  'OSV.dev',
+  'CIRCL Vulnerability-Lookup',
+  'Ubuntu Security Notices',
+  'Microsoft MSRC',
+];
+
+const KEV_SOURCE = 'CISA Known Exploited Vulnerabilities';
+const BOILERPLATE_MIN = 40;
+
+function rankOf(sourceName) {
+  const i = SOURCE_RANK.indexOf(sourceName);
+  return i === -1 ? SOURCE_RANK.length : i;
+}
+
+async function rebuildCveIntel(store) {
+  const rows = await store.all(
+    `SELECT ic.cve_id, i.id AS item_id, i.source_id, i.cvss_score, i.epss_score, i.severity, i.summary,
+            i.published_at, i.exploitation_status, s.name AS source_name
+       FROM item_cves ic
+       JOIN items i ON i.id = ic.item_id
+       JOIN sources s ON s.id = i.source_id`);
+
+  const byCve = new Map();
+  for (const r of rows) {
+    if (!byCve.has(r.cve_id)) byCve.set(r.cve_id, []);
+    byCve.get(r.cve_id).push(r);
+  }
+
+  await store.tx(async (t) => {
+    await t.run('DELETE FROM cve_intel');   // cve_sources cascades
+    for (const [cveId, evidence] of byCve) {
+      const scored = evidence
+        .filter((e) => e.cvss_score != null)
+        .sort((a, b) => rankOf(a.source_name) - rankOf(b.source_name));
+      const winner = scored[0] || null;
+      const cvss = winner ? Number(winner.cvss_score) : null;
+
+      // FIRST EPSS is the only source that populates epss_score, so match on the column rather
+      // than on the source name — a renamed source must not silently drop the score.
+      const epss = evidence.find((e) => e.epss_score != null);
+
+      // "Is this exploited" and "when did CISA add it to the KEV catalog" are different
+      // questions. enrich.js sets exploitation_status = 'actively_exploited' on ANY item
+      // whose CVE is in the KEV set at ingest — not only the actual CISA KEV item — so the
+      // date must come only from the real KEV row, never from an incidentally-flagged one.
+      const kevRow = evidence.find((e) => e.source_name === KEV_SOURCE);
+      const exploited = kevRow || evidence.find((e) => e.exploitation_status === 'actively_exploited');
+
+      // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
+      // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
+      // and become the canonical description.
+      const description = evidence
+        .filter((e) => typeof e.summary === 'string' && e.summary.length >= BOILERPLATE_MIN)
+        .sort((a, b) =>
+          rankOf(a.source_name) - rankOf(b.source_name)
+          || b.summary.length - a.summary.length)[0]?.summary || null;
+
+      const times = evidence.map((e) => e.published_at).filter(Boolean).map((d) => new Date(d).getTime()).sort((a, b) => a - b);
+      const severity = severityFromScore(cvss)
+        || (evidence.map((e) => canonicalSeverity(e.severity)).find((s) => s !== 'unknown'))
+        || 'unknown';
+
+      // Some sources for this CVE (KEV, EPSS, Exploit-DB, Project Zero...) never carry a native
+      // severity/CVSS of their own — their item rows stay severity IS NULL forever even once
+      // corroborating sources (NVD, OSV, Red Hat) resolve one for the same CVE. Backfill it.
+      if (severity !== 'unknown') {
+        const staleIds = evidence.filter((e) => e.severity == null).map((e) => e.item_id);
+        if (staleIds.length) {
+          await t.run('UPDATE items SET severity = $1 WHERE id = ANY($2::int[])', [severity, staleIds]);
+        }
+      }
+
+      await t.run(
+        `INSERT INTO cve_intel (cve_id, cvss_score, cvss_source, severity, epss_score, kev_listed,
+                                kev_added_at, description, first_seen, last_seen, source_count)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [cveId, cvss, winner ? winner.source_name : null, severity,
+         epss ? Number(epss.epss_score) : null, Boolean(exploited), kevRow ? kevRow.published_at : null,
+         description,
+         times.length ? new Date(times[0]) : null,
+         times.length ? new Date(times[times.length - 1]) : null,
+         new Set(evidence.map((e) => e.source_id)).size]);
+
+      for (const e of evidence) {
+        await t.run(
+          `INSERT INTO cve_sources (cve_id, item_id, source_id, cvss_score, severity)
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (cve_id, item_id) DO NOTHING`,
+          [cveId, e.item_id, e.source_id, e.cvss_score, canonicalSeverity(e.severity)]);
+      }
+    }
+  });
+
+  return byCve.size;
+}
+
+async function rebuildClusters(store) {
+  const items = await store.all(
+    `SELECT i.id, i.title, i.published_at, i.source_id, i.confidence,
+            COALESCE(c.cves, '{}') AS cves, COALESCE(a.actors, '{}') AS actors, COALESCE(f.families, '{}') AS families
+       FROM items i
+       LEFT JOIN (SELECT item_id, array_agg(cve_id) AS cves FROM item_cves GROUP BY item_id) c ON c.item_id = i.id
+       LEFT JOIN (SELECT item_id, array_agg(actor) AS actors FROM item_actors GROUP BY item_id) a ON a.item_id = i.id
+       LEFT JOIN (SELECT item_id, array_agg(family) AS families FROM item_malware_families GROUP BY item_id) f ON f.item_id = i.id`);
+
+  const clusters = clusterItems(items);
+
+  await store.tx(async (t) => {
+    await t.run('DELETE FROM clusters');   // cluster_items cascades
+    for (const c of clusters) {
+      const row = await t.get(
+        `INSERT INTO clusters (primary_item_id, title, first_seen, last_seen, source_count)
+         VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+        [c.primaryItemId, c.title, c.firstSeen, c.lastSeen, c.sourceIds.length]);
+      for (const itemId of c.itemIds) {
+        await t.run('INSERT INTO cluster_items (cluster_id, item_id) VALUES ($1,$2) ON CONFLICT (item_id) DO NOTHING', [row.id, itemId]);
+      }
+    }
+  });
+
+  return clusters.length;
+}
+
+async function applyConfidence(store) {
+  // Corroboration = distinct sources sharing this item's cluster. A singleton cluster is
+  // one source, which is the no-bonus case.
+  const rows = await store.all(
+    `SELECT i.id, s.category AS source_category, COALESCE(cl.source_count, 1) AS corroboration
+       FROM items i
+       JOIN sources s ON s.id = i.source_id
+       LEFT JOIN cluster_items ci ON ci.item_id = i.id
+       LEFT JOIN clusters cl ON cl.id = ci.cluster_id`);
+
+  await store.tx(async (t) => {
+    for (const r of rows) {
+      await t.run('UPDATE items SET confidence = $1 WHERE id = $2',
+        [computeConfidence(r.source_category, r.corroboration), r.id]);
+    }
+  });
+
+  return rows.length;
+}
+
+async function pruneSyncHistory(store, days = 90) {
+  const res = await store.run(
+    `DELETE FROM source_syncs WHERE started_at < now() - ($1 || ' days')::interval`, [String(days)]);
+  return res.rowCount;
+}
+
+async function consolidate(store) {
+  const cves = await rebuildCveIntel(store);
+  const clusters = await rebuildClusters(store);
+  const items = await applyConfidence(store);
+  const pruned = await pruneSyncHistory(store, 90);
+  return { cves, clusters, items, pruned };
+}
+
+module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK };

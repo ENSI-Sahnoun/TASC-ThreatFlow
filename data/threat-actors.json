@@ -1,0 +1,12 @@
+[
+  { "name": "APT28", "aliases": ["Fancy Bear", "Sofacy", "Sednit"] },
+  { "name": "APT29", "aliases": ["Cozy Bear", "Midnight Blizzard", "Nobelium"] },
+  { "name": "Lazarus", "aliases": ["Hidden Cobra", "APT38"] },
+  { "name": "Sandworm", "aliases": ["Voodoo Bear", "Telebots"] },
+  { "name": "LockBit", "aliases": [] },
+  { "name": "ALPHV", "aliases": ["BlackCat"] },
+  { "name": "Cl0p", "aliases": ["Clop", "TA505"] },
+  { "name": "Volt Typhoon", "aliases": [] },
+  { "name": "Scattered Spider", "aliases": ["UNC3944", "Octo Tempest"] },
+  { "name": "FIN7", "aliases": ["Carbon Spider"] }
+]

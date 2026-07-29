@@ -1,0 +1,86 @@
+:root {
+  /* Schönbrunn TASC brand guide: Midnight Blue / Aqua primaries, blue-black surface ramp
+     (mixed toward --bg instead of neutral gray) so elevation reads as "midnight blue", not
+     generic OLED dark mode. */
+  --bg: #000028;
+  --surface: #14142a;
+  --surface-2: #202038;
+  --surface-3: #2c2c46;
+  --surface-4: #383854;
+  --chrome: rgba(255, 255, 255, .055);
+  --hairline: rgba(255, 255, 255, .11);
+  /* Shared hover/active overlay tint for interactive chrome (nav links, search button, KPI
+     tiles). The four call sites this replaces ranged .06-.1 alpha — close enough in practice
+     that unifying to one token doesn't read as a visual regression, and it's one fewer literal
+     to keep in sync by hand. */
+  --chrome-hover: rgba(255, 255, 255, .08);
+
+  /* World map's "no data" fill/border. Separate from --surface-2/--hairline because those are
+     tuned to sit on top of --surface panels, not directly on --bg — a surface-toned fill (close
+     to --bg by design) read as barely-there against the page background in both themes. Countries
+     go the opposite way from the page background instead: light landmass on dark bg, dark
+     landmass on light bg — same contrast logic as --ink vs --bg, just its own pair of tones. */
+  --map-empty: #d6d6e6;
+  /* Dark ink, not white, even though this is the dark theme — the border has to contrast against
+     the *fill* it's drawn on, and the fill is light. A white-on-near-white border was invisible;
+     country boundaries only read once the stroke is darker than the landmass it outlines. */
+  --map-border: rgba(0, 0, 40, .4);
+
+  --ink: #ffffff;
+  --ink-2: rgba(235, 235, 245, .62);
+  --ink-3: rgba(235, 235, 245, .42);
+
+  --accent: #32fae6;
+  --accent-soft: rgba(50, 250, 230, .16);
+
+  /* Severity ramp remapped onto brand secondary families: fuchsia = danger (critical/high),
+     lime = caution (medium/low), caribe = informational, indigo tint = unclassified. Relative
+     alarm ordering preserved within each family by saturation/lightness. */
+  --sev-critical: #ff0086;
+  --sev-high: #ff4da8;
+  --sev-medium: #8a9900;
+  --sev-low: #d6ff00;
+  --sev-none: #177d86;
+  --sev-unknown: #8c70ff;
+
+  /* 8 brand-rooted, mutually distinct series colors for category charts: the 5 guide colors
+     at full saturation, then one tint each of aqua/indigo/fuchsia for visual separation. */
+  --cat-1: #32fae6; --cat-2: #4300ff; --cat-3: #d6ff00; --cat-4: #ff0086;
+  --cat-5: #177d86; --cat-6: #8ffcf0; --cat-7: #8c70ff; --cat-8: #ff7fc0;
+
+  --radius-chrome: 13px;
+  --radius-card: 16px;
+  --hair: .5px;
+
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --dur-fast: 160ms;
+  --dur: 200ms;
+  --dur-slow: 240ms;
+  --dur-drawer: 260ms;
+
+  /* Fixed rem scale, ratio ~1.2. Product UI, not fluid type. */
+  --fs-xs: .6875rem; --fs-sm: .8125rem; --fs-md: .9375rem;
+  --fs-lg: 1.125rem; --fs-xl: 1.5rem; --fs-2xl: 2.25rem;
+
+  --z-sticky: 100; --z-drawer-scrim: 200; --z-drawer: 210; --z-modal: 300; --z-toast: 400; --z-tooltip: 500;
+}
+
+/* Light theme: bg/surface/ink/chrome only — accent, severity, and category tokens are the
+   guide's exact documented hex in both themes, unchanged and not re-tuned for contrast. */
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --surface: #f4f4f8;
+  --surface-2: #eaeaf2;
+  --surface-3: #dcdce8;
+  --surface-4: #c8c8da;
+  --chrome: rgba(0, 0, 40, .04);
+  --hairline: rgba(0, 0, 40, .1);
+  --chrome-hover: rgba(0, 0, 40, .06);
+
+  --map-empty: var(--surface-4);
+  --map-border: rgba(0, 0, 40, .4);
+
+  --ink: #000028;
+  --ink-2: rgba(0, 0, 40, .62);
+  --ink-3: rgba(0, 0, 40, .42);
+}

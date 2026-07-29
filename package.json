@@ -1,0 +1,27 @@
+{
+  "name": "threatflow",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server/index.js",
+  "description": "Threat-intelligence aggregation platform: ingests 43 public threat-intel feeds, normalizes them into one schema, enriches with CVEs/IOCs/actors/malware families, and serves a dashboard API. See README.md.",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test \"server/**/*.test.js\""
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.22.0",
+    "rss-parser": "^3.13.0"
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+
+# Angular build output / caches
+frontend-v4/.angular
+frontend-v4/dist
+
+# Legacy SQLite artifacts — this project runs on Postgres
+data/*.db
+data/*.db-shm
+data/*.db-wal

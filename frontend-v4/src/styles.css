@@ -1,0 +1,67 @@
+@import './app/core/tokens.css';
+@import '@fontsource/poppins/400.css';
+@import '@fontsource/poppins/500.css';
+@import '@fontsource/montserrat/600.css';
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  color: var(--ink);
+  font-family: 'Poppins', -apple-system, system-ui, sans-serif;
+  font-size: var(--fs-md);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Brand guide's title-slide look: diagonal aqua light rays over midnight blue, plus a second
+   dim indigo glow low on the opposite corner for depth (the deck's cover uses one light source;
+   two keeps the page from reading as a single flat spotlight once content fills the viewport).
+   A fixed-position pseudo-element behind everything, not `background-attachment: fixed` on
+   body — that property combined with an <iframe> anywhere on the page (tf-browser-window's
+   expand modal) triggers a known browser repaint bug that repeatedly snaps scroll position
+   back to top.
+   The solid `--bg` fill lives HERE, not on `html`/`body` — an element's own painted background
+   sits above a negative z-index descendant everywhere that element has box (i.e. the document's
+   actual content height), so a `background` on `body` was covering these rays for the entire
+   page except the empty viewport tail past the last bit of content. One paint source, full
+   viewport, on every route (this pseudo is shell-level, so it's already shared by dashboard,
+   intel and every other page — not something to redeclare per page). */
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(ellipse 900px 700px at 78% -10%, rgba(50, 250, 230, .16), transparent 62%),
+    radial-gradient(ellipse 700px 600px at -5% 100%, rgba(67, 0, 255, .12), transparent 60%),
+    repeating-linear-gradient(112deg,
+      rgba(50, 250, 230, .04) 0px, rgba(50, 250, 230, .04) 2px,
+      transparent 2px, transparent 46px),
+    var(--bg);
+}
+
+/* Light theme reads the same rays as a muddy cyan cast rather than a light source — the brand
+   deck's version only works against midnight blue. Same structure, dropped to a tint that reads
+   as "expensive paper," not tinted grime. */
+:root[data-theme='light'] body::before {
+  background:
+    radial-gradient(ellipse 900px 700px at 78% -10%, rgba(50, 250, 230, .09), transparent 62%),
+    radial-gradient(ellipse 700px 600px at -5% 100%, rgba(67, 0, 255, .05), transparent 60%),
+    repeating-linear-gradient(112deg,
+      rgba(0, 0, 40, .016) 0px, rgba(0, 0, 40, .016) 2px,
+      transparent 2px, transparent 46px),
+    var(--bg);
+}
+
+/* Brand primary typeface for headings/nav/buttons/captions per Schönbrunn TASC guide
+   hierarchy — Poppins (secondary) stays the html/body default for running text. */
+.tf-heading { font-family: 'Montserrat', -apple-system, system-ui, sans-serif; font-weight: 600; }
+
+/* One visible focus treatment for the entire app. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

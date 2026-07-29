@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ThreatFlow</title>
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    // Set the theme attribute before first paint so there's no flash of the wrong theme while
+    // Angular boots. Kept as a tiny inline script (not app code) for exactly that reason — it
+    // must run synchronously ahead of CSS/first render, which app.ts can't guarantee.
+    (function () {
+      var stored = localStorage.getItem('tf-theme');
+      var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+</head>
+<body>
+  <app-root></app-root>
+</body>
+</html>
