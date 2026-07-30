@@ -45,6 +45,26 @@ export function severityToken(severity: string | null): string {
   return `var(--sev-${normalizeSeverity(severity)})`;
 }
 
+// True for a severity worth a colored pill (a real rating, incl. the explicit "none" rating).
+// "unknown" means "not analyzed yet" — that's the common case for a fresh RSS item, not a fact
+// worth the same visual weight as an actual Critical/High/Medium/Low/None rating, so callers
+// render it as plain muted text instead of a chip (see explorer.component.ts's severity cell).
+export function isRatedSeverity(severity: string | null): boolean {
+  return normalizeSeverity(severity) !== 'unknown';
+}
+
+// Same 10 values as filter-bar.component.ts's CATEGORIES select, in the same order, so a
+// category's dot color is stable across the app regardless of which categories are present in
+// any one page of results (an index-into-visible-data scheme, like the donut chart's, would
+// reassign colors every time the filtered set changes).
+const CATEGORY_ORDER = ['cve', 'ransomware', 'phishing', 'data-breach', 'malware', 'ioc', 'advisory', 'osint', 'news', 'other'];
+
+export function categoryToken(category: string | null): string {
+  const i = category ? CATEGORY_ORDER.indexOf(category) : -1;
+  const n = (i === -1 ? CATEGORY_ORDER.length : i) % 8 + 1;
+  return `var(--cat-${n})`;
+}
+
 export function severityLabel(severity: string | null): string {
   const s = normalizeSeverity(severity);
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -119,6 +139,27 @@ export function cvssDisagreement(sources: ScoredSource[]): string | null {
   const min = scored.reduce((a, b) => (b.cvss_score < a.cvss_score ? b : a));
   if (max.cvss_score === min.cvss_score) return null;
   return `${max.source_name} ${max.cvss_score} · ${min.source_name} ${min.cvss_score}`;
+}
+
+export type CardVariant = 'vulnerability' | 'indicator' | 'incident' | 'plain';
+
+// Which tf-record-card layout a non-RSS item gets, grouped by what data the category actually
+// carries rather than one bespoke layout per category (9 categories, 4 real data shapes).
+export function cardVariant(category: string | null): CardVariant {
+  switch (category) {
+    case 'cve':
+    case 'advisory':
+      return 'vulnerability';
+    case 'ioc':
+    case 'malware':
+    case 'phishing':
+      return 'indicator';
+    case 'ransomware':
+    case 'data-breach':
+      return 'incident';
+    default:
+      return 'plain';
+  }
 }
 
 export function needsKey(s: Pick<Source, 'auth_required' | 'has_api_key'>): boolean {

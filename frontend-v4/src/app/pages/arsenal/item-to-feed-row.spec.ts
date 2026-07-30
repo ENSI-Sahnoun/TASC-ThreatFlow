@@ -5,7 +5,7 @@ import type { Item } from '../../core/models';
 const ITEM: Item = {
   id: 42, source_id: 16, category: 'cve', title: 'CVE-2021-20190',
   summary: 'A flaw was found in jackson-databind.', link: 'https://nvd.nist.gov/vuln/detail/CVE-2021-20190',
-  published_at: '2021-01-19T16:15:13.427Z', severity: 'high', cvss_score: 8.1,
+  published_at: '2021-01-19T16:15:13.427Z', severity: 'high', cvss_score: 8.1, epss_score: null,
   exploitation_status: null, vendor: null, region: null, industry: null, confidence: 0.9,
   source_name: 'NVD CVE API', cluster_id: null, source_count: 1,
 };

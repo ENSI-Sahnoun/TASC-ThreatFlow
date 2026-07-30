@@ -30,13 +30,14 @@ import type { Kpi } from '../core/models';
       background: color-mix(in srgb, var(--c) 6%, var(--surface));
       border: var(--hair) solid var(--hairline); border-radius: var(--radius-chrome);
       padding: 13px 15px;
-      transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+      transition: background var(--dur) var(--ease-out), transform var(--dur-fast) var(--ease-out);
     }
     .tile:hover {
       background: color-mix(in srgb, var(--c) 10%, var(--surface));
       transform: translateY(-1px);
     }
-    .tile:active { transform: translateY(0); }
+    .tile:active { transform: translateY(0) scale(.98); }
+    @media (prefers-reduced-motion: reduce) { .tile { transition: background var(--dur) var(--ease-out); } }
     .label { font-size: var(--fs-xs); font-weight: 510; color: var(--ink-2); }
     .value { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -.032em; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1.06; }
     /* The delta's own text is always --ink-2 — severity colour is reserved for the arrow glyph,

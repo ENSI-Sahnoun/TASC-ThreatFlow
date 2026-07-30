@@ -14,7 +14,12 @@ import { UrlCheckComponent } from '../../ui/url-check.component';
     <tf-url-check />
   `,
   styles: [`
-    :host { display: flex; flex-direction: column; gap: 20px; max-width: 640px; }
+    :host {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 20px; max-width: 640px; margin: 0 auto; width: 100%;
+      min-height: calc(100vh - 140px);
+    }
+    .page-head { width: 100%; text-align: center; }
     .page-head { display: flex; flex-direction: column; gap: 2px; }
     .page-head h1 { margin: 0; font-size: var(--fs-xl); color: var(--ink); }
     .page-head .tagline { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }

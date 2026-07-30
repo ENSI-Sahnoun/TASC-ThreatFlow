@@ -10,3 +10,5 @@ frontend-v4/dist
 data/*.db
 data/*.db-shm
 data/*.db-wal
+
+.superpowers/

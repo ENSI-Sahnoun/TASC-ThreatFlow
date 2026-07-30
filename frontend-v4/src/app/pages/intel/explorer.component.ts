@@ -11,7 +11,7 @@ import { DataTableComponent, type DataTableColumn } from '../../ui/data-table.co
 import { UrlCheckComponent } from '../../ui/url-check.component';
 import { FilterBarComponent, type FilterBarSource } from './filter-bar.component';
 import { toQueryParams, fromQueryParams, type IntelFilters } from '../../core/filters';
-import { relativeTime, compactNumber } from '../../core/format';
+import { relativeTime, compactNumber, isRatedSeverity, categoryToken } from '../../core/format';
 import type { Item, ClusterMember, Facets, IocRow } from '../../core/models';
 
 const PAGE_SIZE = 25;
@@ -24,6 +24,13 @@ const COLUMNS: DataTableColumn[] = [
   { key: 'confidence', label: 'Confidence' },
   { key: 'sources', label: 'Sources' },
 ];
+
+// Title gets whatever's left; every metadata column is fixed to its content's actual width
+// instead of the browser's auto table layout, which was handing "1h" and "95%" the same width
+// as "Chinese-Speaking Threat Actor Harnesses AI Models…". Keep this in sync with `.row`'s own
+// grid-template-columns below — tf-data-table's header and this component's rows share the
+// string so columns line up without the two components knowing about each other's markup.
+const GRID_TEMPLATE = '1fr 120px 100px 60px 56px 116px';
 
 // The routed "/intel" page — the general intel browser. Filters live entirely in the URL
 // (toQueryParams/fromQueryParams) so any filtered view is shareable and survives a reload or a
@@ -83,6 +90,7 @@ const COLUMNS: DataTableColumn[] = [
         } @else {
           <tf-data-table
             [columns]="columns"
+            [gridTemplate]="GRID_TEMPLATE"
             [rows]="rows()"
             [total]="total()"
             [page]="page()"
@@ -95,48 +103,48 @@ const COLUMNS: DataTableColumn[] = [
       }
 
       <ng-template #rowTpl let-row>
-        <tr
-          tabindex="0" role="button" [attr.aria-label]="'Open ' + row.title"
-          (click)="openItem(row)" (keydown.enter)="openItem(row)" (keydown.space)="onRowSpace($event, row)"
-        >
-          <td class="title">{{ row.title }}</td>
-          <td>{{ row.category }}</td>
-          <td><tf-chip [severity]="row.severity" /></td>
-          <td>{{ relativeTime(row.published_at) }}</td>
-          <td>{{ confidenceText(row.confidence) }}</td>
-          <td>
-            @if (row.source_count > 1) {
-              <button
-                type="button" class="cluster-badge" (click)="toggleCluster($event, row)"
-                (keydown.enter)="$event.stopPropagation()" (keydown.space)="$event.stopPropagation()"
-              >
-                {{ row.source_count }} sources {{ isExpanded(row.cluster_id) ? '▲' : '▼' }}
-              </button>
+        <li class="row" [style.grid-template-columns]="GRID_TEMPLATE">
+          <a class="hit" [routerLink]="['/intel', row.id]" [attr.aria-label]="'Open ' + row.title"></a>
+          <span class="title">{{ row.title }}</span>
+          <span class="cat">
+            <span class="cat-dot" [style.--c]="categoryToken(row.category)"></span>{{ row.category }}
+          </span>
+          <span class="sev">
+            @if (isRatedSeverity(row.severity)) {
+              <tf-chip [severity]="row.severity" />
             } @else {
-              <span class="single-source">1 source</span>
+              <span class="unrated">—</span>
             }
-          </td>
-        </tr>
+          </span>
+          <span class="time">{{ relativeTime(row.published_at) }}</span>
+          <span class="conf">{{ confidenceText(row.confidence) }}</span>
+          <span class="src">
+            @if (row.source_count > 1) {
+              <button type="button" class="cluster-badge" (click)="toggleCluster(row)">
+                {{ row.source_count }} <span class="chev">{{ isExpanded(row.cluster_id) ? '▲' : '▼' }}</span>
+              </button>
+            }
+          </span>
+        </li>
         @if (row.cluster_id != null && isExpanded(row.cluster_id)) {
-          <tr class="cluster-expand">
-            <td colspan="6">
-              @if (isClusterLoading(row.cluster_id)) {
-                <tf-skeleton [rows]="2" />
-              } @else if (isClusterError(row.cluster_id)) {
-                <tf-empty-state title="Couldn't load sources" reason="GET /api/clusters/:id/items failed" />
-              } @else {
-                <ul class="cluster-list">
-                  @for (m of clusterMembersFor(row.cluster_id); track m.item_id) {
-                    <li>
-                      <tf-source-dot [status]="m.source_status" [name]="m.source_name" />
-                      <a [routerLink]="['/intel', m.item_id]">{{ m.source_name }}</a>
-                      <span class="time">{{ relativeTime(m.published_at) }}</span>
-                    </li>
-                  }
-                </ul>
-              }
-            </td>
-          </tr>
+          <li class="cluster-expand">
+            @if (isClusterLoading(row.cluster_id)) {
+              <tf-skeleton [rows]="2" />
+            } @else if (isClusterError(row.cluster_id)) {
+              <tf-empty-state title="Couldn't load sources" reason="GET /api/clusters/:id/items failed" />
+            } @else {
+              <ul class="cluster-list">
+                @for (m of clusterMembersFor(row.cluster_id); track m.item_id) {
+                  <li class="member">
+                    <a class="hit" [routerLink]="['/intel', m.item_id]" [attr.aria-label]="'Open ' + m.source_name"></a>
+                    <tf-source-dot [status]="m.source_status" [name]="m.source_name" />
+                    <span class="name">{{ m.source_name }}</span>
+                    <span class="time">{{ relativeTime(m.published_at) }}</span>
+                  </li>
+                }
+              </ul>
+            }
+          </li>
         }
       </ng-template>
     </div>
@@ -155,39 +163,82 @@ const COLUMNS: DataTableColumn[] = [
     .export {
       font-size: var(--fs-xs); font-weight: 590; text-decoration: none;
       color: var(--ink); background: var(--surface-2); padding: 5px 12px; border-radius: 8px;
-      transition: background var(--dur-fast) var(--ease);
+      transition: background var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
     .export:hover { background: var(--surface-3); }
     .export:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .export:active { background: var(--surface-4); }
+    .export:active { background: var(--surface-4); transform: scale(.97); }
 
-    table { width: 100%; border-collapse: collapse; }
-    tbody td { padding: 8px 10px; font-size: var(--fs-sm); color: var(--ink-2); border-bottom: var(--hair) solid var(--hairline); }
-    td.title { color: var(--ink); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    tbody tr[role="button"] { cursor: pointer; transition: background var(--dur-fast) var(--ease); }
-    tbody tr[role="button"]:hover { background: var(--surface-2); }
-    tbody tr[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--surface-2); }
-    tbody tr[role="button"]:active { background: var(--surface-3); }
+    /* One row = one grid line. Title takes the leftover space; every metadata column is a fixed
+       width sized to its actual content (see GRID_TEMPLATE) so short values like "1h" or "95%"
+       stop being stretched wide by table auto-layout. Row click target is .hit, a single
+       stretched <a> (the classic "stretched-link" pattern) instead of a role="button" wrapper —
+       that keeps the cluster-expand <button> a sibling, not a control nested inside another
+       interactive control, and gets real link semantics (Enter to open, no synthetic Space
+       handler) for free. */
+    .row {
+      position: relative; display: grid; gap: 12px; align-items: center;
+      padding: 11px 12px; border-bottom: var(--hair) solid var(--hairline);
+      transition: background var(--dur-fast) var(--ease-out);
+      animation: row-in 200ms var(--ease-out) backwards;
+    }
+    .row:hover, .row:has(.hit:focus-visible) { background: var(--surface-2); }
+    .hit { position: absolute; inset: 0; z-index: 0; }
+    .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-    .single-source { font-size: var(--fs-xs); color: var(--ink-2); }
+    /* No position on these — they must stay plain in-flow content so .hit (positioned,
+       z-index 0) paints above them and catches the click. Give any of these a position, even
+       relative, and it joins .hit's stacking layer; being later in the DOM it would then
+       paint on top and swallow the click, leaving only the gaps between cells clickable. */
+    .title {
+      color: var(--ink); font-weight: 510;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .cat, .sev, .time, .conf, .src { font-size: var(--fs-sm); color: var(--ink-2); }
+    .cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cat-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--c); margin-right: 7px; vertical-align: middle;
+    }
+    /* "Unknown" is "not analyzed yet", not a rating — a loud chip on most rows drowned out the
+       handful of rows with a real severity. Plain muted text keeps the eye on the pills that
+       actually mean something. */
+    .unrated { color: var(--ink-3); }
+
     .cluster-badge {
+      position: relative; z-index: 1;
       appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
       color: var(--ink); background: var(--accent-soft); border: 0; padding: 3px 9px; border-radius: 999px;
-      transition: opacity var(--dur-fast) var(--ease);
+      transition: opacity var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
+    .cluster-badge .chev { opacity: .7; }
     .cluster-badge:hover { opacity: .85; }
     .cluster-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .cluster-badge:active { opacity: .7; }
+    .cluster-badge:active { opacity: .7; transform: scale(.94); }
 
-    tr.cluster-expand td { background: var(--surface-2); padding: 10px 14px; }
-    .cluster-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-    .cluster-list li { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs); }
-    .cluster-list a {
-      color: var(--ink); text-decoration: none; transition: color var(--dur-fast) var(--ease);
+    li.cluster-expand { background: var(--surface-2); padding: 10px 14px; border-bottom: var(--hair) solid var(--hairline); }
+    .cluster-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+    .cluster-list li.member {
+      position: relative; display: flex; align-items: center; gap: 8px;
+      font-size: var(--fs-xs); padding: 5px 8px; border-radius: 8px;
+      transition: background var(--dur-fast) var(--ease-out);
+      animation: row-in 180ms var(--ease-out) backwards;
     }
-    .cluster-list a:hover { color: var(--accent); }
-    .cluster-list a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .cluster-list li.member:hover, .cluster-list li.member:has(.hit:focus-visible) { background: var(--surface-3); }
+    .cluster-list li:nth-child(1) { animation-delay: 0ms; }
+    .cluster-list li:nth-child(2) { animation-delay: 30ms; }
+    .cluster-list li:nth-child(3) { animation-delay: 60ms; }
+    .cluster-list li:nth-child(4) { animation-delay: 90ms; }
+    .cluster-list li:nth-child(n+5) { animation-delay: 120ms; }
+    .cluster-list .hit { position: absolute; inset: 0; z-index: 0; border-radius: inherit; }
+    .cluster-list .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .cluster-list .name { color: var(--ink); }
     .cluster-list .time { color: var(--ink-2); margin-left: auto; }
+
+    @keyframes row-in {
+      from { opacity: 0; transform: translateY(-3px); }
+      to { opacity: 1; transform: none; }
+    }
 
     .err {
       display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -206,7 +257,8 @@ const COLUMNS: DataTableColumn[] = [
     .err button:active { opacity: .74; }
 
     @media (prefers-reduced-motion: reduce) {
-      .export, tbody tr[role="button"], .cluster-badge, .cluster-list a, .err button { transition: none; }
+      .export, .row, .cluster-badge, .cluster-list a, .err button { transition: none; }
+      .row, .cluster-list li { animation: none; }
     }
   `],
 })
@@ -217,6 +269,7 @@ export class ExplorerComponent {
 
   readonly PAGE_SIZE = PAGE_SIZE;
   readonly columns = COLUMNS;
+  readonly GRID_TEMPLATE = GRID_TEMPLATE;
 
   filters = signal<IntelFilters>({});
   page = signal(0);
@@ -239,6 +292,8 @@ export class ExplorerComponent {
 
   relativeTime = relativeTime;
   compactNumber = compactNumber;
+  isRatedSeverity = isRatedSeverity;
+  categoryToken = categoryToken;
   trackById = (r: Item): number => r.id;
 
   iocClipboardText = computed(() => this.iocRowsForFilters().map((r) => r.value).join('\n'));
@@ -323,19 +378,9 @@ export class ExplorerComponent {
     this.loadItems();
   }
 
-  openItem(row: Item): void {
-    this.router.navigate(['/intel', row.id]);
-  }
-
-  // Space must activate a role="button" row the same as Enter (native <button> does this for
-  // free; this custom-role <tr> doesn't). preventDefault stops the page from scrolling.
-  onRowSpace(e: Event, row: Item): void {
-    e.preventDefault();
-    this.openItem(row);
-  }
-
-  toggleCluster(evt: Event, row: Item): void {
-    evt.stopPropagation();
+  // The cluster-expand button sits beside `.hit` (the row's stretched link), not inside it, so
+  // there's no click-bubbling into the link to guard against here.
+  toggleCluster(row: Item): void {
     const id = row.cluster_id;
     if (id == null) return;
     const next = new Set(this.expandedClusters());

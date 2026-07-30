@@ -13,7 +13,7 @@ import { CommandPaletteComponent } from './command-palette.component';
   imports: [RouterLink, RouterLinkActive, RouterOutlet, CommandPaletteComponent],
   template: `
     <header class="nav">
-      <a routerLink="/" class="brand tf-heading"><img [src]="theme.theme() === 'light' ? 'logo-dark.png' : 'logo.png'" alt="" class="brand-logo" />ThreatFlow</a>
+      <a routerLink="/" class="brand tf-heading"><img [src]="theme.theme() === 'light' ? 'logo-dark.png' : 'logo.png'" alt="" class="brand-logo" [class.swap]="logoSwapping()" />ThreatFlow</a>
       <nav>
         <a routerLink="/" routerLinkActive="on" [routerLinkActiveOptions]="{ exact: true }">Dashboard</a>
         <a routerLink="/arsenal" routerLinkActive="on">Arsenal</a>
@@ -21,7 +21,7 @@ import { CommandPaletteComponent } from './command-palette.component';
         <a routerLink="/check" routerLinkActive="on">Check URL</a>
       </nav>
       <button
-        class="theme-toggle" type="button" (click)="theme.toggle()"
+        class="theme-toggle" type="button" (click)="toggleTheme()"
         [attr.aria-label]="theme.theme() === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
         title="Toggle theme"
       >
@@ -71,7 +71,20 @@ import { CommandPaletteComponent } from './command-palette.component';
       display: flex; align-items: center; gap: 8px;
       color: var(--ink); text-decoration: none; letter-spacing: -.02em;
     }
-    .brand-logo { width: 22px; height: 22px; object-fit: contain; }
+    .brand-logo {
+      width: 22px; height: 22px; object-fit: contain;
+      transition: transform var(--dur-fast) var(--ease);
+    }
+    .brand:hover .brand-logo { transform: scale(1.12) rotate(-6deg); }
+    /* Src swap between logo.png / logo-dark.png on theme toggle is otherwise an instant,
+       jarring replace — this pulse masks the swap instead of animating it directly, since
+       there's no way to crossfade between two different \`src\` values on one <img>. */
+    .brand-logo.swap { animation: logo-swap var(--dur-slow) var(--ease); }
+    @keyframes logo-swap {
+      0% { transform: scale(1) rotate(0deg); opacity: 1; }
+      45% { transform: scale(.55) rotate(10deg); opacity: .3; }
+      100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    }
     nav { display: flex; gap: 4px; }
     nav a {
       color: var(--ink-2); text-decoration: none; font-size: var(--fs-sm); font-weight: 510;
@@ -122,6 +135,7 @@ export class ShellComponent {
   private api = inject(ApiService);
   theme = inject(ThemeService);
   paletteOpen = signal(false);
+  logoSwapping = signal(false);
   // Guarded against errors: a failed fetch must not blank the whole shell (which owns
   // <router-outlet>) — it just means the degradation banner has nothing to report this time.
   health = toSignal(
@@ -147,6 +161,12 @@ export class ShellComponent {
   // where focus happens to be — so it is the one and only authority for Escape while open.
   onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); this.openPalette(); }
+  }
+
+  toggleTheme(): void {
+    this.theme.toggle();
+    this.logoSwapping.set(true);
+    setTimeout(() => this.logoSwapping.set(false), 240);
   }
 
   openPalette(): void {

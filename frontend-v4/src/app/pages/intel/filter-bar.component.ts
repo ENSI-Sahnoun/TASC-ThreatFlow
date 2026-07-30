@@ -116,7 +116,14 @@ type SelectKey = 'category' | 'severity' | 'exploitation_status' | 'vendor' | 'r
     </div>
   `,
   styles: [`
-    .bar { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+    .bar {
+      display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+      position: sticky; top: 8px; z-index: var(--z-sticky);
+      background: color-mix(in srgb, var(--surface) 78%, transparent);
+      backdrop-filter: blur(16px) saturate(160%);
+      border: var(--hair) solid var(--hairline); border-radius: var(--radius-card);
+      padding: 12px 14px;
+    }
     label {
       display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--ink-2);
     }
@@ -126,25 +133,31 @@ type SelectKey = 'category' | 'severity' | 'exploitation_status' | 'vendor' | 'r
       appearance: none; font: inherit; font-size: var(--fs-sm); color: var(--ink);
       background: var(--surface-2); border: var(--hair) solid var(--hairline);
       border-radius: 8px; padding: 6px 10px; width: 100%; box-sizing: border-box;
-      transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+      transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+        transform var(--dur-fast) var(--ease-out);
     }
     select { cursor: pointer; }
     input[type="number"] { width: 110px; }
     input:hover, select:hover { background: var(--surface-3); }
-    input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 1px; transform: translateY(-1px);
+    }
     input:disabled, select:disabled { opacity: .4; cursor: not-allowed; }
 
     .clear {
       appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
       color: var(--ink); background: var(--accent-soft); border: 0; padding: 7px 14px; border-radius: 8px;
-      transition: opacity var(--dur-fast) var(--ease);
+      transition: opacity var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
     .clear:hover { opacity: .88; }
     .clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .clear:active { opacity: .74; }
+    .clear:active { opacity: .74; transform: scale(.96); }
 
     @media (prefers-reduced-motion: reduce) {
       input, select, .clear { transition: none; }
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .bar { background: var(--surface); backdrop-filter: none; }
     }
   `],
 })

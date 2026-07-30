@@ -10,6 +10,7 @@ import { SourceDotComponent } from '../../ui/source-dot.component';
 import { ChipComponent } from '../../ui/chip.component';
 import { CopyButtonComponent } from '../../ui/copy-button.component';
 import { BrowserWindowComponent } from '../../ui/browser-window.component';
+import { RecordCardComponent } from '../../ui/record-card.component';
 import { relativeTime, stripHtml } from '../../core/format';
 import type { ItemDetail } from '../../core/models';
 
@@ -26,7 +27,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink, PanelComponent, EmptyStateComponent, SkeletonComponent, SourceDotComponent,
-    ChipComponent, CopyButtonComponent, BrowserWindowComponent,
+    ChipComponent, CopyButtonComponent, BrowserWindowComponent, RecordCardComponent,
   ],
   template: `
     @if (detail(); as d) {
@@ -49,12 +50,16 @@ interface EntityLink { key: string; label: string; path: string[]; }
           </p>
         }
 
-        <tf-browser-window
-          [url]="d.link" [title]="d.title" [sourceName]="d.source_name ?? 'Unknown source'"
-          [sourceStatus]="sourceStatus()" [time]="relativeTime(d.published_at)"
-          [summary]="cleanedSummary()"
-          [allowExpand]="sourceFetchKind() === 'rss'"
-        />
+        @if (sourceFetchKind() !== null && sourceFetchKind() !== 'rss') {
+          <tf-record-card [item]="d" />
+        } @else {
+          <tf-browser-window
+            [url]="d.link" [title]="d.title" [sourceName]="d.source_name ?? 'Unknown source'"
+            [sourceStatus]="sourceStatus()" [time]="relativeTime(d.published_at)"
+            [summary]="cleanedSummary()"
+            [allowExpand]="sourceFetchKind() === 'rss'"
+          />
+        }
 
         <dl class="meta">
           <div><dt>Category</dt><dd>{{ d.category }}</dd></div>
@@ -147,14 +152,25 @@ interface EntityLink { key: string; label: string; path: string[]; }
   styles: [`
     :host { display: flex; flex-direction: column; gap: 16px; }
 
-    .back { align-self: flex-start; font-size: var(--fs-xs); color: var(--ink-2); text-decoration: none; transition: color var(--dur-fast) var(--ease); }
+    .back { align-self: flex-start; font-size: var(--fs-xs); color: var(--ink-2); text-decoration: none; transition: color var(--dur-fast) var(--ease-out); }
     .back:hover { color: var(--ink); }
     .not-found { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 32px 0; }
     .not-found .back { align-self: center; }
 
     .header {
-      background: var(--surface); border-radius: var(--radius-card); border: var(--hair) solid var(--hairline);
+      background: color-mix(in srgb, var(--surface) 82%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      border-radius: var(--radius-card); border: var(--hair) solid var(--hairline);
+      box-shadow: 0 12px 32px -16px rgba(0, 0, 20, .5);
       padding: 16px; display: flex; flex-direction: column; gap: 10px;
+      animation: card-in 240ms var(--ease-out) backwards;
+    }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(6px) scale(.99); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .header { background: var(--surface); backdrop-filter: none; }
     }
     .head-row { display: flex; align-items: center; gap: 8px; }
     .source-name { font-size: var(--fs-sm); color: var(--ink-2); }
@@ -176,10 +192,10 @@ interface EntityLink { key: string; label: string; path: string[]; }
     .entity {
       font-size: var(--fs-xs); font-weight: 510; color: var(--ink); text-decoration: none;
       background: var(--surface-2); padding: 4px 10px; border-radius: 999px;
-      transition: background var(--dur-fast) var(--ease);
+      transition: background var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
     a.entity:hover { background: var(--surface-3); }
-    a.entity:active { background: var(--surface-4); }
+    a.entity:active { background: var(--surface-4); transform: scale(.95); }
     .entity.tag { color: var(--ink-2); cursor: default; }
 
     .tf-scroll { overflow-x: auto; }
@@ -193,14 +209,20 @@ interface EntityLink { key: string; label: string; path: string[]; }
     .expand {
       appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 510;
       color: var(--ink-2); background: var(--surface-2); border: 0; padding: 3px 9px; border-radius: 6px;
-      transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+      transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
     .expand:hover { color: var(--ink); background: var(--surface-3); }
     a.entity:focus-visible, .expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .expand:active { background: var(--surface-4); }
+    .expand:active { background: var(--surface-4); transform: scale(.95); }
+
+    tbody tr { animation: row-in 180ms var(--ease-out) backwards; }
+    @keyframes row-in {
+      from { opacity: 0; transform: translateY(-3px); }
+      to { opacity: 1; transform: none; }
+    }
 
     tr.ip-expand td { background: var(--surface-2); padding: 10px 14px; }
-    dl.ip-meta { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 0; }
+    dl.ip-meta { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 0; animation: row-in 180ms var(--ease-out); }
     dl.ip-meta div { min-width: 120px; }
     dl.ip-meta dd { margin: 0; font-size: var(--fs-xs); color: var(--ink); word-break: break-word; }
     dl.meta div, dl.ip-meta div { display: flex; flex-direction: column; gap: 2px; }
@@ -234,6 +256,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
 
     @media (prefers-reduced-motion: reduce) {
       .back, .entity, .expand, .err button { transition: none; }
+      .header, tbody tr, dl.ip-meta { animation: none; }
     }
   `],
 })

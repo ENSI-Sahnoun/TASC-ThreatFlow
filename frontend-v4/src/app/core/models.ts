@@ -76,7 +76,7 @@ export interface SourceStats {
 export interface Item {
   id: number; source_id: number; category: string; title: string; summary: string | null;
   link: string | null; published_at: string | null; severity: string | null;
-  cvss_score: number | null; exploitation_status: string | null; vendor: string | null;
+  cvss_score: number | null; epss_score: number | null; exploitation_status: string | null; vendor: string | null;
   region: string | null; industry: string | null; confidence: number | null; source_name?: string;
   // Non-primary cluster members (the same story from other sources) are excluded from
   // GET /api/items — cluster_id/source_count on the row that remains let the UI offer to

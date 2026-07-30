@@ -5,10 +5,17 @@ import { NgTemplateOutlet } from '@angular/common';
 
 export interface DataTableColumn { key: string; label: string; }
 
-// Generic server-side-paginated table shell. It owns the header row, the pager, and structural
+// Generic server-side-paginated list shell. It owns the header row, the pager, and structural
 // styling only — row rendering is delegated entirely to the caller's own <ng-template> so any
-// page can project whatever cell markup (chips, links, expand-in-place rows) it needs without
+// page can project whatever row markup (chips, links, expand-in-place rows) it needs without
 // this component knowing about item/CVE/actor shapes.
+//
+// Rows render as a plain <ul>/<li> list, not a <table> — a caller's row template supplies its
+// own single stretched-link hit target per row (see explorer.component.ts) rather than a
+// role="button" wrapper, so a row can hold a real secondary <button> (e.g. "expand cluster")
+// without nesting one interactive control inside another. `gridTemplate` is the CSS
+// grid-template-columns string the header uses; pass the identical value to the row template's
+// own `.row { grid-template-columns: ... }` so header and rows line up.
 @Component({
   selector: 'tf-data-table',
   standalone: true,
@@ -16,18 +23,14 @@ export interface DataTableColumn { key: string; label: string; }
   imports: [NgTemplateOutlet],
   template: `
     <div class="tf-scroll">
-      <table>
-        <thead>
-          <tr>
-            @for (c of columns; track c.key) { <th>{{ c.label }}</th> }
-          </tr>
-        </thead>
-        <tbody>
-          @for (row of rows; track trackByFn(row)) {
-            <ng-container [ngTemplateOutlet]="rowTemplate" [ngTemplateOutletContext]="{ $implicit: row }" />
-          }
-        </tbody>
-      </table>
+      <div class="head-row" role="row" [style.grid-template-columns]="gridTemplate">
+        @for (c of columns; track c.key) { <span class="h" role="columnheader">{{ c.label }}</span> }
+      </div>
+      <ul class="rows" role="list">
+        @for (row of rows; track trackByFn(row)) {
+          <ng-container [ngTemplateOutlet]="rowTemplate" [ngTemplateOutletContext]="{ $implicit: row }" />
+        }
+      </ul>
     </div>
 
     <div class="pager">
@@ -43,11 +46,14 @@ export interface DataTableColumn { key: string; label: string; }
     :host { display: flex; flex-direction: column; gap: 10px; }
 
     .tf-scroll { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; }
-    thead th {
-      text-align: left; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2);
-      padding: 6px 10px; border-bottom: var(--hair) solid var(--hairline); white-space: nowrap;
+    .head-row {
+      display: grid; gap: 12px; align-items: center;
+      padding: 0 12px 6px; border-bottom: var(--hair) solid var(--hairline);
     }
+    .h {
+      text-align: left; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2); white-space: nowrap;
+    }
+    .rows { list-style: none; margin: 0; padding: 0; }
 
     .pager {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -58,11 +64,11 @@ export interface DataTableColumn { key: string; label: string; }
     button {
       appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
       color: var(--ink); background: var(--surface-2); border: 0; padding: 5px 12px; border-radius: 8px;
-      transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+      transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
     }
     button:hover:not(:disabled) { background: var(--surface-3); }
     button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    button:active:not(:disabled) { background: var(--surface-4); }
+    button:active:not(:disabled) { background: var(--surface-4); transform: scale(.97); }
     button:disabled { cursor: default; opacity: .4; }
 
     @media (prefers-reduced-motion: reduce) {
@@ -72,6 +78,7 @@ export interface DataTableColumn { key: string; label: string; }
 })
 export class DataTableComponent<T = unknown> {
   @Input() columns: DataTableColumn[] = [];
+  @Input() gridTemplate = '1fr';
   @Input() rows: T[] = [];
   @Input() total = 0;
   @Input() page = 0;

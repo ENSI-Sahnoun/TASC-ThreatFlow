@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   relativeTime, compactNumber, severityToken, severityLabel, cvssBand, sourceHealth, needsKey,
-  statusLabel, stripHtml, epssPercent, cvssDisagreement, formatDate, hostname,
+  statusLabel, stripHtml, epssPercent, cvssDisagreement, formatDate, hostname, cardVariant,
 } from './format';
 
 const NOW = new Date('2026-07-26T12:00:00Z');
@@ -165,5 +165,21 @@ describe('statusLabel', () => {
         item_count: 12,
       }),
     ).toEqual({ kind: 'needs-key', text: 'Needs API key (ABUSECH_AUTH_KEY)' });
+  });
+});
+
+describe('cardVariant', () => {
+  it('groups categories by which fields they actually populate', () => {
+    expect(cardVariant('cve')).toBe('vulnerability');
+    expect(cardVariant('advisory')).toBe('vulnerability');
+    expect(cardVariant('ioc')).toBe('indicator');
+    expect(cardVariant('malware')).toBe('indicator');
+    expect(cardVariant('phishing')).toBe('indicator');
+    expect(cardVariant('ransomware')).toBe('incident');
+    expect(cardVariant('data-breach')).toBe('incident');
+    expect(cardVariant('osint')).toBe('plain');
+    expect(cardVariant('news')).toBe('plain');
+    expect(cardVariant('other')).toBe('plain');
+    expect(cardVariant(null)).toBe('plain');
   });
 });
