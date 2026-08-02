@@ -108,31 +108,74 @@ const dshield = {
   },
 };
 
+// MSRC's /cvrf/v3.0/updates list is a document index, not per-CVE detail — its rows are
+// monthly rollup stubs ("March 2017 Security Updates", Severity: null, dated 2017) with no
+// description field at all. Real per-CVE data lives behind each stub's CvrfUrl.
+//
+// A single CVRF document holds ~991 vulnerabilities, so this is capped twice: to the three
+// most recent documents, and to MSRC_MAX_ITEMS emitted items. The /updates index is returned
+// oldest-first (1999-Sep is element 0), so "most recent" is the tail.
+const MSRC_DOC_COUNT = 3;
+const MSRC_MAX_ITEMS = 400;
+
 const msrc = {
-  // MSRC's /cvrf/v3.0/updates list is a document index, not per-CVE detail — it has no
-  // description field at all. mapping.summary used to point at DocumentTitle, so every
-  // doc's summary was just its own title repeated; several titles (e.g. "Mariner Release
-  // Notes") repeat across dozens of distinct monthly docs, making them indistinguishable.
-  // ID/Alias/Severity/dates are present and unused — compose those instead.
   async fetch(source, ctx) {
     const res = await ctx.request(source.url, { timeoutMs: 20000, headers: { Accept: 'application/json' } });
     if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-    const records = JSON.parse(res.body).value || [];
-    return records.filter((r) => r.DocumentTitle).map((r) => normalizedItem({
-      external_id: r.ID || r.Alias,
-      title: r.Alias && r.Alias !== r.DocumentTitle ? `${r.DocumentTitle} (${r.Alias})` : r.DocumentTitle,
-      summary: [
-        r.Severity && `Severity: ${r.Severity}`,
-        r.InitialReleaseDate && `released ${r.InitialReleaseDate.slice(0, 10)}`,
-        r.CurrentReleaseDate && r.CurrentReleaseDate !== r.InitialReleaseDate && `updated ${r.CurrentReleaseDate.slice(0, 10)}`,
-      ].filter(Boolean).join(' — ') || null,
-      author: 'Microsoft MSRC',
-      link: r.CvrfUrl || null,
-      published_at: r.InitialReleaseDate || null,
-      category: 'vulnerability',
-      raw: r,
-      native: { severity: r.Severity ? String(r.Severity).toLowerCase() : null },
-    }));
+    const index = JSON.parse(res.body).value || [];
+    const recent = index
+      .filter((r) => r.CvrfUrl)
+      .sort((a, b) => new Date(a.InitialReleaseDate || 0) - new Date(b.InitialReleaseDate || 0))
+      .slice(-MSRC_DOC_COUNT);
+
+    const maxItems = Number(source.requestBody) || MSRC_MAX_ITEMS;
+    const items = [];
+    for (const doc of recent) {
+      if (items.length >= maxItems) break;
+      let vulns;
+      try {
+        const docRes = await ctx.request(doc.CvrfUrl, { timeoutMs: 30000, headers: { Accept: 'application/json' } });
+        if (docRes.status < 200 || docRes.status >= 300) continue;
+        vulns = JSON.parse(docRes.body).Vulnerability || [];
+      } catch {
+        // A document that cannot be fetched or parsed contributes nothing. No stub fallback —
+        // the content-free stubs are exactly what this change removes.
+        continue;
+      }
+      for (const v of vulns) {
+        if (items.length >= maxItems) break;
+        if (!v.CVE) continue;
+        // CVSSScoreSets repeats the same score once per affected ProductID; the first entry
+        // carries the base score for the vulnerability itself.
+        const scoreSet = (v.CVSSScoreSets || [])[0] || null;
+        const vector = scoreSet ? scoreSet.Vector : null;
+        const score = scoreSet && typeof scoreSet.BaseScore === 'number'
+          ? scoreSet.BaseScore
+          : scoreFromVector(vector);
+        // Notes Type 2 is the CVE description; Type 4 is FAQ boilerplate.
+        const description = (v.Notes || []).find((n) => n.Type === 2);
+        const revision = (v.RevisionHistory || [])[0];
+        const version = vector && /^CVSS:(\d\.\d)/.test(vector) ? vector.match(/^CVSS:(\d\.\d)/)[1] : null;
+        items.push(normalizedItem({
+          external_id: v.CVE,
+          title: v.Title && v.Title.Value ? `${v.CVE} — ${v.Title.Value}` : v.CVE,
+          summary: description ? description.Value : null,
+          author: 'Microsoft MSRC',
+          link: `https://msrc.microsoft.com/update-guide/vulnerability/${v.CVE}`,
+          published_at: (revision && revision.Date) || doc.InitialReleaseDate || null,
+          category: 'cve',
+          raw: v,
+          native: {
+            cveIds: [v.CVE],
+            vendor: 'Microsoft',
+            cvssScore: score != null ? score : null,
+            cvssVersion: version,
+            severity: score != null ? severityFromScore(score, version) : null,
+          },
+        }));
+      }
+    }
+    return items;
   },
 };
 

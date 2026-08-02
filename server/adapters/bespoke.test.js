@@ -132,21 +132,72 @@ test('nvd_cve paginates the publication pass and passes an apiKey header when pr
   assert.strictEqual(items[1].external_id, 'CVE-2026-0002');
 });
 
-test('msrc composes title/summary from ID/Alias/Severity/dates, not the missing description field', async () => {
-  const body = JSON.stringify({
-    value: [
-      { ID: '2011-Aug', Alias: '2011-Aug', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2011-08-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T14:28:28Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2011-Aug' },
-      { ID: '2000-Jan', Alias: '2000-Jan', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2000-01-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T01:04:13Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2000-Jan' },
-    ],
-  });
-  const source = { url: 'x' };
-  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
-  const items = await bespoke.msrc.fetch(source, ctx);
+// The /updates endpoint is a document index of monthly rollups with no description and a
+// null Severity. Per-CVE data lives behind each stub's CvrfUrl.
+const MSRC_INDEX = {
+  value: [
+    { ID: '1999-Sep', DocumentTitle: 'Mariner Release Notes', InitialReleaseDate: '1999-09-02T00:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/1999-Sep' },
+    { ID: '2026-Apr', DocumentTitle: 'April 2026 Security Updates', InitialReleaseDate: '2026-04-14T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-Apr' },
+    { ID: '2026-May', DocumentTitle: 'May 2026 Security Updates', InitialReleaseDate: '2026-05-12T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-May' },
+    { ID: '2026-Jun', DocumentTitle: 'June 2026 Security Updates', InitialReleaseDate: '2026-06-09T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-Jun' },
+  ],
+};
+
+function cvrfDoc(id, cve) {
+  return {
+    DocumentTitle: { Value: `${id} Security Updates` },
+    Vulnerability: [{
+      CVE: cve,
+      Title: { Value: 'Windows DNS Client Elevation of Privilege Vulnerability' },
+      CVSSScoreSets: [{ BaseScore: 7.0, Vector: 'CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H' }],
+      Notes: [{ Type: 2, Title: 'Description', Value: '<p>Heap-based buffer overflow.</p>' }],
+      RevisionHistory: [{ Number: '1.0', Date: '2026-06-09T07:00:00' }],
+    }],
+  };
+}
+
+function msrcCtx({ fail = [] } = {}) {
+  const fetched = [];
+  return {
+    fetched,
+    request: async (url) => {
+      if (url.endsWith('/updates')) return { status: 200, headers: {}, body: JSON.stringify(MSRC_INDEX) };
+      const id = url.split('/').pop();
+      fetched.push(id);
+      if (fail.includes(id)) throw new Error('boom');
+      return { status: 200, headers: {}, body: JSON.stringify(cvrfDoc(id, `CVE-2026-${id}`)) };
+    },
+  };
+}
+
+test('msrc follows CvrfUrl for the three most recent documents only', async () => {
+  const ctx = msrcCtx();
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, ctx);
+  assert.deepStrictEqual(ctx.fetched.sort(), ['2026-Apr', '2026-Jun', '2026-May']);
+  assert.strictEqual(items.length, 3);
+  assert.ok(items.every((i) => i.external_id.startsWith('CVE-2026-')));
+});
+
+test('msrc emits per-CVE items with score, severity and description', async () => {
+  const [item] = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, msrcCtx());
+  assert.strictEqual(item.category, 'cve');
+  assert.strictEqual(item.native.cvssScore, 7.0);
+  assert.strictEqual(item.native.cvssVersion, '3.1');
+  assert.strictEqual(item.native.severity, 'high');
+  assert.match(item.summary, /Heap-based buffer overflow/);
+  assert.ok(!/<p>/.test(item.summary), 'HTML must be stripped by cleanSummary');
+});
+
+// Absence over fabrication: a failed document contributes nothing, and never a stub.
+test('msrc skips a document whose CvrfUrl fetch fails', async () => {
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, msrcCtx({ fail: ['2026-Jun'] }));
   assert.strictEqual(items.length, 2);
-  assert.notStrictEqual(items[0].title, items[1].title);
-  assert.match(items[0].title, /Mariner Release Notes \(2011-Aug\)/);
-  assert.match(items[0].summary, /released 2011-08-02/);
-  assert.match(items[0].summary, /updated 2026-02-18/);
+  assert.ok(!items.some((i) => i.external_id.includes('Jun')));
+});
+
+test('msrc caps total emitted items at requestBody', async () => {
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates', requestBody: '2' }, msrcCtx());
+  assert.strictEqual(items.length, 2);
 });
 
 test('ghsa maps summary and cvss from a real advisory shape, without faking a vendor from the package id', async () => {
