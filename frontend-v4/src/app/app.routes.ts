@@ -11,5 +11,6 @@ export const routes: Routes = [
   { path: 'cve/:id', loadComponent: () => import('./pages/entity/cve.component').then((m) => m.CveComponent) },
   { path: 'actor/:name', loadComponent: () => import('./pages/entity/actor.component').then((m) => m.ActorComponent) },
   { path: 'malware/:family', loadComponent: () => import('./pages/entity/malware.component').then((m) => m.MalwareComponent) },
+  { path: 'onboarding', loadComponent: () => import('./pages/onboarding/survey.component').then((m) => m.SurveyComponent) },
   { path: '**', redirectTo: '' },
 ];

@@ -47,12 +47,17 @@ export class ProfileService {
     } catch { /* storage unavailable (private mode); selection still works for this session */ }
   }
 
-  create(payload: ProfilePayload, done?: (p: Profile) => void): void {
-    this.api.createProfile(payload).subscribe((p) => {
-      this._profiles.update((rows) => [p, ...rows]);
-      this._loaded.set(true);
-      this.select(p.id);
-      done?.(p);
+  create(payload: ProfilePayload, done?: (p: Profile) => void, fail?: (message: string) => void): void {
+    this.api.createProfile(payload).subscribe({
+      next: (p) => {
+        this._profiles.update((rows) => [p, ...rows]);
+        this._loaded.set(true);
+        this.select(p.id);
+        done?.(p);
+      },
+      // The API returns 400 with a specific reason (duplicate name, unknown sector, non-slug
+      // vendor). Surfacing it beats a generic failure the user cannot act on.
+      error: (e) => fail?.(e?.error?.error ?? 'Could not save the profile.'),
     });
   }
 

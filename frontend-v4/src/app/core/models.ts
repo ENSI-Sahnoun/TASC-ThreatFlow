@@ -203,3 +203,7 @@ export interface ProfilePayload {
   region: string | null;
   severityFloor: string;
 }
+
+// GET /api/domains — the threat-domain vocabulary with corpus counts, used by the survey's
+// domain step and the explorer facets.
+export interface DomainOption { slug: string; label: string; count: number; }

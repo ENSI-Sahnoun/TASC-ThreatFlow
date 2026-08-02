@@ -5,7 +5,7 @@ import { toQueryParams, type IntelFilters } from './filters';
 import type {
   DashboardStats, FeedRow, Source, SourceStats, Item, ItemDetail,
   CveIntel, CveDetail, EntityProfile, SearchResults, Facets, ClusterMember, IocRow, IocCheckResult,
-  PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet,
+  PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet, DomainOption,
 } from './models';
 
 // One method per endpoint and nothing else. No caching, no state — stores own that.
@@ -130,6 +130,10 @@ export class ApiService {
 
   sectors(): Observable<Sector[]> {
     return this.http.get<Sector[]>('/api/sectors');
+  }
+
+  domainOptions(): Observable<DomainOption[]> {
+    return this.http.get<DomainOption[]>('/api/domains');
   }
 
   // Autocomplete for the survey's tech-stack step. Reads item_cpes, so the suggestions are
