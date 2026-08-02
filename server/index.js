@@ -13,6 +13,7 @@ const { startScheduler } = require('./scheduler');
 const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, cpeFacets, maxAgeClause } = require('./queries');
 const { SECTORS, recommendationFor } = require('./sector_profiles');
 const profiles = require('./profiles');
+const { recomputeProfile } = require('./relevance');
 
 const CONFIG_BY_NAME = configByName();
 
@@ -105,13 +106,21 @@ function createApp(store) {
     res.json(await profiles.listProfiles(store));
   }));
 
+  // Verdicts are recomputed in the background: a recompute over the whole corpus takes about a
+  // second, which is worth not blocking a form submit on. A failure here leaves items at
+  // 'not_yours' until the next trigger rather than failing the write the user actually asked for.
+  const recomputeInBackground = (id) => { recomputeProfile(store, id).catch(() => {}); };
+
   app.post('/api/profiles', h(async (req, res) => {
+    let created;
     try {
-      res.status(201).json(await profiles.createProfile(store, req.body || {}));
+      created = await profiles.createProfile(store, req.body || {});
     } catch (e) {
       // Validation and duplicate-name failures are caller errors, not server faults.
-      res.status(400).json({ error: e.message });
+      return res.status(400).json({ error: e.message });
     }
+    recomputeInBackground(created.id);
+    res.status(201).json(created);
   }));
 
   app.get('/api/profiles/:id', h(async (req, res) => {
@@ -131,8 +140,9 @@ function createApp(store) {
       return res.status(400).json({ error: e.message });
     }
     if (!updated) return res.status(404).json({ error: 'not found' });
-    // 202: the row is saved, but Phase 2's relevance recompute for the new profile_version
-    // runs in the background.
+    // 202: the row is saved, but the relevance recompute for the new profile_version runs in
+    // the background. Until it finishes, items read as 'not_yours' at the new version.
+    recomputeInBackground(updated.id);
     res.status(202).json(updated);
   }));
 
@@ -140,6 +150,13 @@ function createApp(store) {
     const id = parseId(req.params.id);
     if (!id || !(await profiles.deleteProfile(store, id))) return res.status(404).json({ error: 'not found' });
     res.status(204).end();
+  }));
+
+  app.post('/api/profiles/:id/relevance/recompute', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const result = id && await recomputeProfile(store, id);
+    if (!result) return res.status(404).json({ error: 'not found' });
+    res.status(202).json(result);
   }));
 
   app.get('/api/sources', h(async (req, res) => {
@@ -261,12 +278,15 @@ function createApp(store) {
     } catch (e) {
       consolidationError = e.message;
     }
+    // Newly ingested items have no verdict yet. Rescore every profile after consolidation, so
+    // the tiers reflect the cve_intel facts this sync just rebuilt rather than the previous ones.
+    for (const p of await profiles.listProfiles(store)) recomputeInBackground(p.id);
     res.json({ results, consolidation, consolidationError });
   }));
 
   app.get('/api/items', h(async (req, res) => {
     // Validate the header before any query runs, so a bad profile id fails fast as a 400.
-    await resolveProfile(req);
+    const profile = await resolveProfile(req);
     const { category, source_id, q, limit } = req.query;
     const params = [];
     const ph = (v) => { params.push(v); return `$${params.length}`; };
@@ -319,20 +339,50 @@ function createApp(store) {
       WHERE cl.primary_item_id <> ci.item_id
     )`);
 
+    // With a profile active, relevance drives the order. An item with no row yet (inserted
+    // between recomputes) is treated as not_yours: it sorts last but is never dropped, and the
+    // caller never has to handle a null tier.
+    let relJoin = '';
+    let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches';
+    let orderBy = 'ORDER BY COALESCE(items.published_at, items.fetched_at) DESC';
+    if (profile) {
+      const pid = ph(profile.id);
+      const pver = ph(profile.profile_version);
+      relJoin = `LEFT JOIN item_relevance ir
+                   ON ir.item_id = items.id AND ir.profile_id = ${pid} AND ir.profile_version = ${pver}`;
+      relSelect = "COALESCE(ir.tier, 'not_yours') AS rel_tier, COALESCE(ir.matches, '[]'::jsonb) AS rel_matches";
+      // Rank, don't hide — opt-in only.
+      if (req.query.relevantOnly === '1') where.push("COALESCE(ir.tier, 'not_yours') IN ('act_now','watch')");
+      orderBy = `ORDER BY CASE COALESCE(ir.tier, 'not_yours')
+                   WHEN 'act_now' THEN 0 WHEN 'watch' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
+                 COALESCE(ir.score, 0) DESC,
+                 COALESCE(items.published_at, items.fetched_at) DESC`;
+    }
+
     const whereSql = where.join(' AND ');
-    const total = (await store.get(`SELECT COUNT(*)::int AS c FROM items JOIN sources ON sources.id = items.source_id WHERE ${whereSql}`, params)).c;
+    const total = (await store.get(
+      `SELECT COUNT(*)::int AS c FROM items JOIN sources ON sources.id = items.source_id ${relJoin} WHERE ${whereSql}`,
+      params)).c;
     const lim = Math.min(Number(limit) || 50, 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
     const rows = await store.all(`
       SELECT items.*, sources.name AS source_name, sources.tier AS source_tier,
-             cl.id AS cluster_id, COALESCE(cl.source_count, 1) AS source_count
+             cl.id AS cluster_id, COALESCE(cl.source_count, 1) AS source_count,
+             ${relSelect}
       FROM items
       JOIN sources ON sources.id = items.source_id
       LEFT JOIN clusters cl ON cl.primary_item_id = items.id
+      ${relJoin}
       WHERE ${whereSql}
-      ORDER BY COALESCE(items.published_at, items.fetched_at) DESC
+      ${orderBy}
       LIMIT ${ph(lim)} OFFSET ${ph(offset)}
     `, params);
+
+    for (const row of rows) {
+      row.relevance = profile ? { tier: row.rel_tier, matches: row.rel_matches } : null;
+      delete row.rel_tier;
+      delete row.rel_matches;
+    }
     // Total lives in a header so the body stays a bare array (stable contract); the
     // CORS layer exposes X-Total-Count so a cross-origin Angular grid can read it.
     res.setHeader('X-Total-Count', total);
