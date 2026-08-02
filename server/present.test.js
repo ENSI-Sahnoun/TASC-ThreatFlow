@@ -68,3 +68,28 @@ test('normalizeLink repairs bare domains and rejects non-URLs', () => {
   assert.strictEqual(normalizeLink(''), null);
   assert.strictEqual(normalizeLink(null), null);
 });
+
+const { bulkIocSummary } = require('./present');
+
+test('bulkIocSummary describes a phishing URL from its host and date', () => {
+  assert.strictEqual(
+    bulkIocSummary({ category: 'phishing', value: 'http://evil.test/login', sourceName: 'OpenPhish', firstSeen: '2026-07-30T10:00:00Z' }),
+    'Phishing page on evil.test, first seen 2026-07-30, reported by OpenPhish.');
+});
+
+test('bulkIocSummary labels malware payloads distinctly', () => {
+  assert.strictEqual(
+    bulkIocSummary({ category: 'malware', value: 'http://bad.test/x.exe', sourceName: 'abuse.ch URLhaus', firstSeen: '2026-07-30T10:00:00Z' }),
+    'Malware payload on bad.test, first seen 2026-07-30, reported by abuse.ch URLhaus.');
+});
+
+test('bulkIocSummary omits the date clause when none is supplied', () => {
+  assert.strictEqual(
+    bulkIocSummary({ category: 'phishing', value: 'http://evil.test/login', sourceName: 'OpenPhish', firstSeen: null }),
+    'Phishing page on evil.test, reported by OpenPhish.');
+});
+
+test('bulkIocSummary returns null when it has nothing to describe', () => {
+  assert.strictEqual(bulkIocSummary({ category: 'phishing', value: 'not-a-url', sourceName: 'OpenPhish' }), null);
+  assert.strictEqual(bulkIocSummary({ category: 'news', value: 'http://x.test/', sourceName: 'S' }), null);
+});

@@ -55,6 +55,19 @@ function displayTitle(title, opts = {}) {
   return `${label}${prefix} · ${host}`;
 }
 
+// Bulk indicator feeds (OpenPhish, URLhaus) emit one URL per record with no prose. A generated
+// model summary would add nothing a template cannot state exactly, so this stays deterministic.
+function bulkIocSummary({ category, value, sourceName, firstSeen } = {}) {
+  const label = CATEGORY_LABEL[category];
+  if (!label) return null;
+  const host = hostOf(value);
+  if (!host) return null;
+  const date = firstSeen ? String(firstSeen).slice(0, 10) : null;
+  const when = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `, first seen ${date}` : '';
+  const who = sourceName ? `, reported by ${sourceName}` : '';
+  return `${label} on ${host}${when}${who}.`;
+}
+
 function humanizeToken(token) {
   const parts = String(token || '').split(/[_\-\s]+/).filter(Boolean);
   if (!parts.length) return '';
@@ -98,4 +111,4 @@ function normalizeLink(link) {
   return null;
 }
 
-module.exports = { extractTitleUrl, displayTitle, cleanSummary, humanizeToken, normalizeLink };
+module.exports = { extractTitleUrl, displayTitle, cleanSummary, humanizeToken, normalizeLink, bulkIocSummary };
