@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { makeTempDb } = require('./test-helpers');
-const { syncSource, writeItem } = require('./fetchers');
+const { syncSource, writeItem, normalizeDate } = require('./fetchers');
 const { enrichItem } = require('./enrich');
 
 async function insertSource(store, s) {
@@ -203,4 +203,23 @@ test('enrichItem passes native.cpes through', () => {
 test('enrichItem defaults cpes to an empty array', () => {
   const enr = enrichItem({ category: 'news', title: 'x', summary: '', native: {} });
   assert.deepStrictEqual(enr.cpes, []);
+});
+
+// CERT-EU emits "Wed, 08 Apr 2026 18:00:00 CEST". JS Date only recognises the RFC-822 US
+// zone abbreviations, so CEST/CET parse as Invalid Date and the row loses its date entirely.
+test('normalizeDate resolves European timezone abbreviations', () => {
+  assert.strictEqual(normalizeDate('Wed, 08 Apr 2026 18:00:00 CEST'), '2026-04-08T16:00:00.000Z');
+  assert.strictEqual(normalizeDate('Wed, 08 Jan 2026 18:00:00 CET'), '2026-01-08T17:00:00.000Z');
+});
+
+test('normalizeDate leaves standard formats alone', () => {
+  assert.strictEqual(normalizeDate('2026-04-08T18:00:00Z'), '2026-04-08T18:00:00.000Z');
+  assert.strictEqual(normalizeDate('Wed, 08 Apr 2026 18:00:00 GMT'), '2026-04-08T18:00:00.000Z');
+  assert.strictEqual(normalizeDate('Wed, 08 Apr 2026 18:00:00 +0200'), '2026-04-08T16:00:00.000Z');
+});
+
+test('normalizeDate still returns null for genuinely unparseable input', () => {
+  for (const bad of [null, '', 'not a date', 'Wed, 08 Apr 2026 18:00:00 ZZZZ']) {
+    assert.strictEqual(normalizeDate(bad), null);
+  }
 });

@@ -8,9 +8,22 @@ const { detectFields } = require('./field_detect');
 // Sources emit dates in mixed formats (ISO 8601, RFC-822 `Wed, 20 Jun 2018 ...`,
 // `2024-01-01 12:00:00 UTC`). Canonicalize to ISO 8601 so the timestamptz column parses
 // them and recency ordering is chronological rather than lexical.
+// JS Date only recognises the RFC-822 US zone abbreviations (GMT/UT/EST/EDT/CST/CDT/MST/
+// MDT/PST/PDT). CERT-EU emits "Wed, 08 Apr 2026 18:00:00 CEST", which parses as Invalid Date
+// and silently costs the row its publication date. Rewrite the known European abbreviations
+// to their numeric offset rather than dropping the date.
+// BST is ambiguous (British Summer Time +0100 vs Bangladesh Standard Time +0600); +0100 is
+// the correct reading for the European/UK feeds in sources.config.js, which are the only
+// ones emitting it here.
+const TZ_ABBREV_OFFSETS = { CET: '+0100', CEST: '+0200', WET: '+0000', WEST: '+0100', EET: '+0200', EEST: '+0300', BST: '+0100' };
+const TRAILING_TZ_RE = /\s([A-Z]{2,4})$/;
+
 function normalizeDate(v) {
   if (v == null || v === '') return null;
-  const d = new Date(v);
+  let s = String(v).trim();
+  const m = s.match(TRAILING_TZ_RE);
+  if (m && TZ_ABBREV_OFFSETS[m[1]]) s = s.replace(TRAILING_TZ_RE, ` ${TZ_ABBREV_OFFSETS[m[1]]}`);
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
 }
