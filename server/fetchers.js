@@ -43,12 +43,12 @@ async function recordSync(store, sourceId, startedAt, { status, itemsNew = 0, it
 async function writeItem(t, sourceId, item, enr) {
   const externalId = item.external_id != null ? String(item.external_id) : null;
   const inserted = await t.get(
-    `INSERT INTO items (source_id, category, title, summary, author, link, published_at, external_id, raw_json, severity, cvss_score, epss_score, exploitation_status, vendor, region, industry, threat_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    `INSERT INTO items (source_id, category, title, summary, author, link, published_at, external_id, raw_json, severity, cvss_score, epss_score, exploitation_status, vendor, region, industry, threat_type, cvss_version)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
      ON CONFLICT (source_id, external_id) DO UPDATE SET
        category=excluded.category, title=excluded.title, summary=excluded.summary, author=excluded.author, link=excluded.link,
        published_at=excluded.published_at, fetched_at=now(), raw_json=excluded.raw_json,
-       severity=excluded.severity, cvss_score=excluded.cvss_score, epss_score=excluded.epss_score,
+       severity=excluded.severity, cvss_score=excluded.cvss_score, cvss_version=excluded.cvss_version, epss_score=excluded.epss_score,
        exploitation_status=excluded.exploitation_status,
        vendor=excluded.vendor, region=excluded.region, industry=excluded.industry, threat_type=excluded.threat_type
      RETURNING id, (xmax = 0) AS inserted`,
@@ -70,6 +70,7 @@ async function writeItem(t, sourceId, item, enr) {
       enr.region,
       enr.industry,
       enr.threatType,
+      enr.cvssVersion,
     ]
   );
   const itemId = inserted.id;

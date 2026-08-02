@@ -64,3 +64,25 @@ test('enrichItem carries the EPSS probability through', () => {
   // absent is null, never undefined — the column is nullable and writeItem binds it directly
   assert.strictEqual(enrichItem({ title: 'x', summary: '', category: 'cve' }).epssScore, null);
 });
+
+test('enrichItem records the CVSS version alongside the score', () => {
+  const enr = enrichItem({
+    category: 'cve', title: 'CVE-2026-1', summary: '',
+    native: { cvssScore: 5.0, severity: 'medium', cvssVersion: '2.0' },
+  });
+  assert.strictEqual(enr.cvssVersion, '2.0');
+  assert.strictEqual(enr.severity, 'medium');
+});
+
+test('enrichItem derives severity with v2 bands when the version says v2', () => {
+  const enr = enrichItem({
+    category: 'cve', title: 'CVE-2026-2', summary: '',
+    native: { cvssScore: 9.3, cvssVersion: '2.0' },
+  });
+  assert.strictEqual(enr.severity, 'high');   // never 'critical' for v2
+});
+
+test('enrichItem defaults cvssVersion to null', () => {
+  const enr = enrichItem({ category: 'news', title: 'x', summary: '', native: {} });
+  assert.strictEqual(enr.cvssVersion, null);
+});

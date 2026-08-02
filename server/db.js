@@ -49,6 +49,7 @@ async function applySchema(s = store) {
       raw_json TEXT,
       severity TEXT,
       cvss_score DOUBLE PRECISION,
+      cvss_version TEXT,
       epss_score DOUBLE PRECISION,
       exploitation_status TEXT,
       vendor TEXT,
@@ -151,6 +152,7 @@ async function applySchema(s = store) {
 
     -- CREATE TABLE IF NOT EXISTS never alters an existing table, so the column needs this too.
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
   `);
 }
 

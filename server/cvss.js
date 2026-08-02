@@ -70,7 +70,19 @@ function scoreFromVector(vector) {
   return baseScore(parsed.metrics);
 }
 
-function severityFromScore(score) {
+// CVSS v2 has no 'critical' band: 7.0-10 high, 4.0-6.9 medium, 0.1-3.9 low.
+// v2 and v3 scores are never renormalized into each other — a v2 9.3 is 'high', not 'critical'.
+function severityFromScoreV2(score) {
+  if (score == null || Number.isNaN(Number(score))) return null;
+  const n = Number(score);
+  if (n >= 7) return 'high';
+  if (n >= 4) return 'medium';
+  if (n > 0) return 'low';
+  return 'none';
+}
+
+function severityFromScore(score, version) {
+  if (String(version || '').startsWith('2')) return severityFromScoreV2(score);
   if (score == null || Number.isNaN(Number(score))) return null;
   const n = Number(score);
   if (n >= 9) return 'critical';
@@ -78,6 +90,33 @@ function severityFromScore(score) {
   if (n >= 4) return 'medium';
   if (n > 0) return 'low';
   return 'none';
+}
+
+// NVD emits metrics keyed by version. Priority is newest-first; v2 is last because it is
+// what NVD's 1990s-2000s backlog carries and is the least precise.
+const NVD_METRIC_PRIORITY = [
+  { key: 'cvssMetricV31', version: '3.1' },
+  { key: 'cvssMetricV30', version: '3.0' },
+  { key: 'cvssMetricV2',  version: '2.0' },
+];
+
+function metricFromNvd(metrics) {
+  if (!metrics || typeof metrics !== 'object') return null;
+  for (const { key, version } of NVD_METRIC_PRIORITY) {
+    const entry = Array.isArray(metrics[key]) ? metrics[key][0] : null;
+    if (!entry) continue;
+    const data = entry.cvssData || {};
+    const score = data.baseScore;
+    if (typeof score !== 'number' || Number.isNaN(score)) continue;
+    // v3 nests baseSeverity inside cvssData; v2 places it on the metric object.
+    const rawLabel = version === '2.0' ? entry.baseSeverity : data.baseSeverity;
+    const labelled = rawLabel != null ? canonicalSeverity(rawLabel) : null;
+    const severity = (labelled && labelled !== 'unknown')
+      ? labelled
+      : severityFromScore(score, version);
+    return { score, severity, version };
+  }
+  return null;
 }
 
 // Never lets a non-enum value through. Anything unrecognised — including the JSON blobs the
@@ -88,4 +127,4 @@ function canonicalSeverity(value) {
   return VENDOR_SEVERITY[key] || 'unknown';
 }
 
-module.exports = { parseVector, baseScore, scoreFromVector, severityFromScore, canonicalSeverity, SEVERITIES };
+module.exports = { parseVector, baseScore, scoreFromVector, severityFromScore, severityFromScoreV2, metricFromNvd, canonicalSeverity, SEVERITIES };

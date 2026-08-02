@@ -74,10 +74,11 @@ function enrichItem(item, { kevCveSet } = { kevCveSet: new Set() }) {
   // Prefer the feed's number; fall back to scoring its vector. A feed-supplied severity word
   // is honoured only if it maps to the canonical enum — blobs and arrays become 'unknown'.
   const cvssScore = native.cvssScore != null ? Number(native.cvssScore) : scoreFromVector(native.cvssVector);
+  const cvssVersion = native.cvssVersion || null;
   const fromLabel = native.severity != null ? canonicalSeverity(native.severity) : null;
   const severity = (fromLabel && fromLabel !== 'unknown')
     ? fromLabel
-    : (severityFromScore(cvssScore) || (native.severity != null ? 'unknown' : null));
+    : (severityFromScore(cvssScore, cvssVersion) || (native.severity != null ? 'unknown' : null));
 
   let exploitationStatus = native.exploitation || null;
   if (!exploitationStatus && cves.some((c) => kevCveSet.has(c))) exploitationStatus = 'actively_exploited';
@@ -98,6 +99,7 @@ function enrichItem(item, { kevCveSet } = { kevCveSet: new Set() }) {
     cpes: native.cpes || [],
     severity,
     cvssScore,
+    cvssVersion,
     epssScore: native.epssScore != null ? Number(native.epssScore) : null,
     exploitationStatus,
     vendor: native.vendor || null,
