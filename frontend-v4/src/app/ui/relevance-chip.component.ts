@@ -1,0 +1,44 @@
+import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
+import { tierLabel, tierToken, tierIsProminent, matchSentence } from '../core/relevance';
+import type { Relevance } from '../core/models';
+
+// The "Possible Threat" indicator. Sits beside the severity chip and answers a different
+// question: severity is how bad this is in general, this is how much it should matter to you.
+//
+// The label carries the meaning and the colour only reinforces it, so it still works in
+// greyscale — same rule as ChipComponent. The reasoning lives in the tooltip rather than the
+// row, because a feed of 24k items has to stay scannable.
+@Component({
+  selector: 'tf-relevance-chip',
+  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    @if (relevance) {
+      <span
+        class="rel"
+        [class.quiet]="!prominent"
+        [style.--c]="color"
+        [title]="sentence"
+      >{{ label }}</span>
+    }
+  `,
+  styles: [`
+    .rel {
+      display: inline-block; font-size: var(--fs-xs); font-weight: 590;
+      padding: 2px 8px; border-radius: 999px; white-space: nowrap; cursor: help;
+      background: color-mix(in srgb, var(--c) 18%, transparent);
+      color: var(--ink);
+    }
+    /* low / not_yours stay legible and stay in the list — they just do not compete for
+       attention with the tiers that need action. */
+    .quiet { background: transparent; color: var(--ink-2); border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); }
+  `],
+})
+export class RelevanceChipComponent {
+  @Input() relevance: Relevance | null = null;
+
+  get label() { return tierLabel(this.relevance?.tier); }
+  get color() { return tierToken(this.relevance?.tier); }
+  get prominent() { return tierIsProminent(this.relevance?.tier); }
+  get sentence() { return matchSentence(this.relevance?.matches); }
+}

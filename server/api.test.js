@@ -320,3 +320,111 @@ test('a valid X-Profile-Id is accepted on /api/items', async () => {
     assert.strictEqual(res.status, 200);
   } finally { await cleanup(); }
 });
+
+async function seedRelevanceFixture(store) {
+  const src = await store.get(
+    "INSERT INTO sources (name, fetch_kind, active) VALUES ('RS','json_api',true) RETURNING id");
+  const hit = await store.get(
+    `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+     VALUES ($1,'cve','FortiOS RCE','CVE-2026-1','high', now() - interval '2 days') RETURNING id`, [src.id]);
+  await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [hit.id]);
+  const miss = await store.get(
+    `INSERT INTO items (source_id, category, title, external_id, published_at)
+     VALUES ($1,'news','Unrelated','N-2', now() - interval '1 day') RETURNING id`, [src.id]);
+  return { hitId: hit.id, missId: miss.id };
+}
+
+const REL_PROFILE = {
+  name: 'Rel', sector: 'finance', vendors: ['fortinet'], products: ['fortios'],
+  threatDomains: [], severityFloor: 'medium',
+};
+
+test('GET /api/items omits relevance when no profile header is sent', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const res = await get(app, '/api/items');
+    assert.ok(res.body.length > 0);
+    assert.strictEqual(res.body[0].relevance, null);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items returns a tier and matches for the active profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    const hit = res.body.find((r) => r.id === hitId);
+    assert.strictEqual(hit.relevance.tier, 'act_now');
+    assert.ok(hit.relevance.matches.some((m) => m.kind === 'product'));
+  } finally { await cleanup(); }
+});
+
+// Rank, don't hide: the most relevant item leads, the rest stay reachable below it.
+test('GET /api/items sorts act_now ahead of not_yours when a profile is active', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    assert.strictEqual(res.body[0].id, hitId, 'act_now must lead even though it is not the newest');
+  } finally { await cleanup(); }
+});
+
+test('?relevantOnly=1 filters to act_now and watch, and is off by default', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(p.body.id) };
+
+    assert.strictEqual((await send(app, 'GET', '/api/items', null, hdr)).body.length, 2, 'nothing hidden by default');
+    const only = await send(app, 'GET', '/api/items?relevantOnly=1', null, hdr);
+    assert.strictEqual(only.body.length, 1);
+    assert.strictEqual(only.body[0].id, hitId);
+  } finally { await cleanup(); }
+});
+
+// An item inserted between recomputes has no row yet; it must sort last, not vanish and not
+// force the frontend to handle a null.
+test('an item with no relevance row is served as not_yours, not null', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const src = await store.get("SELECT id FROM sources WHERE name='RS'");
+    const late = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Arrived late','N-3', now()) RETURNING id`, [src.id]);
+
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    const row = res.body.find((r) => r.id === late.id);
+    assert.ok(row, 'the unscored item must still appear');
+    assert.strictEqual(row.relevance.tier, 'not_yours');
+    assert.deepStrictEqual(row.relevance.matches, []);
+  } finally { await cleanup(); }
+});
+
+test('POST /api/profiles/:id/relevance/recompute returns 202 and 404 for unknown ids', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    assert.strictEqual((await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`)).status, 202);
+    assert.strictEqual((await send(app, 'POST', '/api/profiles/999/relevance/recompute')).status, 404);
+  } finally { await cleanup(); }
+});

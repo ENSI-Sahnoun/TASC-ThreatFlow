@@ -438,6 +438,37 @@ The ten sectors, each with a `recommendation` of `{ vendors, products, threatDom
 severityFloor }` used to preselect the survey's recommended step. Every vendor slug is verified
 to exist in `item_cpes`.
 
+### `POST /api/profiles/:id/relevance/recompute`
+
+`202` with `{ scored, tiers }`. Recompute also fires automatically on profile create, on profile
+save, and after `POST /api/sources/sync-all`'s consolidation — always in the background, so a
+failure never fails the write the caller asked for.
+
+A full recompute over ~24k items takes about a second; it is pure JS with no network, so there is
+no resume or partial-progress logic.
+
+### Relevance on item listings
+
+`GET /api/items` gains a `relevance` field:
+
+```json
+"relevance": { "tier": "act_now", "matches": [{ "kind": "product", "value": "fortinet fortios" }] }
+```
+
+- `null` **only** when no `X-Profile-Id` is set.
+- With a profile active, every item carries a tier. An item with no stored row yet (inserted
+  between recomputes) is served as `{ "tier": "not_yours", "matches": [] }` — never `null`, and
+  never dropped from results.
+- Tiers, most to least urgent: `act_now`, `watch`, `low`, `not_yours`.
+- `match.kind` is one of `product`, `vendor`, `domain`, `kev`, `sector`, `severity`.
+- Default order with a profile active is tier, then internal score, then recency. Without one it
+  is recency alone.
+- `?relevantOnly=1` narrows to `act_now` and `watch`. **Off by default** — the scorer will
+  sometimes be wrong, so nothing is hidden unless asked.
+
+The numeric score behind the ordering is deliberately **not exposed**: it breaks ties within a
+tier and implies no precision beyond that.
+
 ### `GET /api/cpe-facets`
 
 Frequency-ranked autocomplete for the survey's tech-stack step.

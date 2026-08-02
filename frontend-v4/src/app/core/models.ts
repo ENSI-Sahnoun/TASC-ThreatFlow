@@ -82,6 +82,9 @@ export interface Item {
   // GET /api/items — cluster_id/source_count on the row that remains let the UI offer to
   // expand the collapsed duplicates via GET /api/clusters/:id/items.
   cluster_id: number | null; source_count: number;
+  // null only when no profile is active; otherwise always populated, with an unscored item
+  // reading as not_yours rather than null.
+  relevance?: Relevance | null;
 }
 
 export interface ClusterMember {
@@ -207,3 +210,17 @@ export interface ProfilePayload {
 // GET /api/domains — the threat-domain vocabulary with corpus counts, used by the survey's
 // domain step and the explorer facets.
 export interface DomainOption { slug: string; label: string; count: number; }
+
+// The "Possible Threat" verdict. `tier` is decided by the deterministic scorer; `matches` are
+// the reasons it used, and are what the explanation sentence is built from.
+export interface RelevanceMatch {
+  kind: 'product' | 'vendor' | 'domain' | 'kev' | 'sector' | 'severity';
+  value: string;
+}
+
+// null only when no profile is active. With one, every item carries a tier — an item not yet
+// scored reads as not_yours rather than null.
+export interface Relevance {
+  tier: 'act_now' | 'watch' | 'low' | 'not_yours';
+  matches: RelevanceMatch[];
+}

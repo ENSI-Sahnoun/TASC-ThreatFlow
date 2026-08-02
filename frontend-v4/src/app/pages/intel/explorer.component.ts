@@ -6,6 +6,7 @@ import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { SourceDotComponent } from '../../ui/source-dot.component';
 import { ChipComponent } from '../../ui/chip.component';
+import { RelevanceChipComponent } from '../../ui/relevance-chip.component';
 import { CopyButtonComponent } from '../../ui/copy-button.component';
 import { DataTableComponent, type DataTableColumn } from '../../ui/data-table.component';
 import { UrlCheckComponent } from '../../ui/url-check.component';
@@ -20,6 +21,9 @@ const COLUMNS: DataTableColumn[] = [
   { key: 'title', label: 'Title' },
   { key: 'category', label: 'Category' },
   { key: 'severity', label: 'Severity' },
+  // Sits next to severity deliberately: severity is how bad this is in general, threat is how
+  // much it should matter to the active profile.
+  { key: 'threat', label: 'Threat' },
   { key: 'published', label: 'Published' },
   { key: 'confidence', label: 'Confidence' },
   { key: 'sources', label: 'Sources' },
@@ -30,7 +34,7 @@ const COLUMNS: DataTableColumn[] = [
 // as "Chinese-Speaking Threat Actor Harnesses AI Models…". Keep this in sync with `.row`'s own
 // grid-template-columns below — tf-data-table's header and this component's rows share the
 // string so columns line up without the two components knowing about each other's markup.
-const GRID_TEMPLATE = '1fr 120px 100px 60px 56px 116px';
+const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
 
 // The routed "/intel" page — the general intel browser. Filters live entirely in the URL
 // (toQueryParams/fromQueryParams) so any filtered view is shareable and survives a reload or a
@@ -44,7 +48,7 @@ const GRID_TEMPLATE = '1fr 120px 100px 60px 56px 116px';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink, EmptyStateComponent, SkeletonComponent, SourceDotComponent,
-    ChipComponent, CopyButtonComponent, DataTableComponent, UrlCheckComponent, FilterBarComponent,
+    ChipComponent, RelevanceChipComponent, CopyButtonComponent, DataTableComponent, UrlCheckComponent, FilterBarComponent,
   ],
   template: `
     <div class="explorer">
@@ -112,6 +116,13 @@ const GRID_TEMPLATE = '1fr 120px 100px 60px 56px 116px';
           <span class="sev">
             @if (isRatedSeverity(row.severity)) {
               <tf-chip [severity]="row.severity" />
+            } @else {
+              <span class="unrated">—</span>
+            }
+          </span>
+          <span class="threat">
+            @if (row.relevance) {
+              <tf-relevance-chip [relevance]="row.relevance" />
             } @else {
               <span class="unrated">—</span>
             }
@@ -194,7 +205,7 @@ const GRID_TEMPLATE = '1fr 120px 100px 60px 56px 116px';
       color: var(--ink); font-weight: 510;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .cat, .sev, .time, .conf, .src { font-size: var(--fs-sm); color: var(--ink-2); }
+    .cat, .sev, .threat, .time, .conf, .src { font-size: var(--fs-sm); color: var(--ink-2); }
     .cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cat-dot {
       display: inline-block; width: 7px; height: 7px; border-radius: 50%;
