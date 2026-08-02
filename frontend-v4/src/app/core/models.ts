@@ -163,3 +163,43 @@ export interface SearchResults {
   families: { family: string }[];
   sources: { id: number; name: string; last_status: string | null }[];
 }
+
+// Profiles are personas, not accounts — no password, no session, no boundary between them.
+// `X-Profile-Id` names the active one on every /api/* call.
+export interface Profile {
+  id: number;
+  name: string;
+  sector: string;
+  vendors: string[];
+  products: string[];
+  threat_domains: string[];
+  region: string | null;
+  severity_floor: string;
+  profile_version: number;
+}
+
+export interface SectorRecommendation {
+  vendors: string[];
+  products: string[];
+  threatDomains: string[];
+  severityFloor: string;
+}
+
+export interface Sector {
+  slug: string;
+  label: string;
+  recommendation: SectorRecommendation;
+}
+
+export interface CpeFacet { value: string; refs: number; }
+
+// Write shape for POST/PUT /api/profiles — camelCase, unlike the snake_case row the API returns.
+export interface ProfilePayload {
+  name: string;
+  sector: string;
+  vendors: string[];
+  products: string[];
+  threatDomains: string[];
+  region: string | null;
+  severityFloor: string;
+}

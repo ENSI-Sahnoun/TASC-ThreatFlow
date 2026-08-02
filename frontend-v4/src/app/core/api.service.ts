@@ -5,7 +5,7 @@ import { toQueryParams, type IntelFilters } from './filters';
 import type {
   DashboardStats, FeedRow, Source, SourceStats, Item, ItemDetail,
   CveIntel, CveDetail, EntityProfile, SearchResults, Facets, ClusterMember, IocRow, IocCheckResult,
-  PreviewCheck,
+  PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet,
 } from './models';
 
 // One method per endpoint and nothing else. No caching, no state — stores own that.
@@ -110,5 +110,32 @@ export class ApiService {
   iocRows(filters: IntelFilters): Observable<IocRow[]> {
     const params = new HttpParams({ fromObject: { ...toQueryParams(filters), format: 'json' } });
     return this.http.get<IocRow[]>('/api/export/iocs', { params });
+  }
+
+  profiles(): Observable<Profile[]> {
+    return this.http.get<Profile[]>('/api/profiles');
+  }
+
+  createProfile(payload: ProfilePayload): Observable<Profile> {
+    return this.http.post<Profile>('/api/profiles', payload);
+  }
+
+  updateProfile(id: number, payload: ProfilePayload): Observable<Profile> {
+    return this.http.put<Profile>(`/api/profiles/${id}`, payload);
+  }
+
+  deleteProfile(id: number): Observable<unknown> {
+    return this.http.delete(`/api/profiles/${id}`);
+  }
+
+  sectors(): Observable<Sector[]> {
+    return this.http.get<Sector[]>('/api/sectors');
+  }
+
+  // Autocomplete for the survey's tech-stack step. Reads item_cpes, so the suggestions are
+  // slugs that can actually match an item.
+  cpeFacets(q: string, kind: 'vendor' | 'product'): Observable<CpeFacet[]> {
+    const params = new HttpParams().set('q', q).set('kind', kind);
+    return this.http.get<CpeFacet[]>('/api/cpe-facets', { params });
   }
 }
