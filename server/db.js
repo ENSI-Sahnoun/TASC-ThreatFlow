@@ -99,6 +99,23 @@ async function applySchema(s = store) {
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Materialized because sorting 24k rows by tier has to happen in SQL — a page cannot be
+    -- sorted by a value that has not been computed. Keyed by profile_version so a profile edit
+    -- invalidates verdicts; superseded versions are left orphaned rather than deleted, so
+    -- reverting an edit re-exposes the cached set instantly.
+    CREATE TABLE IF NOT EXISTS item_relevance (
+      profile_id      INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      item_id         INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      profile_version INT NOT NULL,
+      tier            TEXT NOT NULL CHECK (tier IN ('act_now','watch','low','not_yours')),
+      score           DOUBLE PRECISION NOT NULL,
+      matches         JSONB NOT NULL,
+      computed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (profile_id, item_id, profile_version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_relevance_sort
+      ON item_relevance(profile_id, profile_version, tier, score DESC);
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,
