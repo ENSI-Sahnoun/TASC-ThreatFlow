@@ -60,6 +60,10 @@ function buildPrompt(profile, item) {
     'Now do the same for this one.',
     `Reader works in the ${profile.sector} sector.`,
     `Title: "${item.title}"`,
+    // Many items are titled with a bare CVE id, which gives the model nothing to describe — the
+    // first batch produced near-identical boilerplate for every such row. The upstream
+    // description is what makes one CVE distinguishable from the next.
+    ...(item.summary ? [`Description: "${String(item.summary).slice(0, 400)}"`] : []),
     `Facts: ${describeMatches(item.matches)}.`,
     'Rules: at most 30 words, address the reader as "you", use only the facts given, invent',
     'nothing, and never mention this task, the facts list, or the word "report".',
@@ -76,7 +80,11 @@ function buildPrompt(profile, item) {
 // The model occasionally echoes prompt scaffolding back inside an otherwise valid sentence.
 // That is a wrong answer wearing the right shape, so it is rejected like any other bad output
 // rather than shown to a user.
-const SCAFFOLD_RE = /security (report|headline)|^\s*\{|your one sentence|relevant to a reader|json/i;
+// "acme" is the fictional vendor in the one-shot example above. The model sometimes carries it
+// into a real answer — "you run Acme VPN" — which is a fabricated claim about the reader's own
+// estate, exactly the kind of confident wrongness this feature must not produce. Any sentence
+// mentioning it is discarded.
+const SCAFFOLD_RE = /security (report|headline)|^\s*\{|your one sentence|relevant to a reader|json|\bacme\b/i;
 
 // Falsely telling a user they have already been breached is the most damaging thing this
 // feature could do. Asking the model not to does not work — a 1.7B model does not reliably obey
@@ -104,7 +112,7 @@ async function generateProse(store, profileId, { judge = judgeText, model = DEFA
 
   // Only rows that need a sentence: a prominent tier, at the current version, with none written.
   const pending = await store.all(
-    `SELECT ir.item_id, ir.tier, ir.matches, i.title
+    `SELECT ir.item_id, ir.tier, ir.matches, i.title, i.summary
        FROM item_relevance ir
        JOIN items i ON i.id = ir.item_id
       WHERE ir.profile_id = $1

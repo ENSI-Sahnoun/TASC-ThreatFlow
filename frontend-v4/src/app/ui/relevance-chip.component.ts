@@ -1,5 +1,5 @@
 import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
-import { tierLabel, tierToken, tierIsProminent, matchSentence } from '../core/relevance';
+import { tierLabel, tierToken, tierIsProminent, explanation } from '../core/relevance';
 import type { Relevance } from '../core/models';
 
 // The "Possible Threat" indicator. Sits beside the severity chip and answers a different
@@ -40,5 +40,5 @@ export class RelevanceChipComponent {
   get label() { return tierLabel(this.relevance?.tier); }
   get color() { return tierToken(this.relevance?.tier); }
   get prominent() { return tierIsProminent(this.relevance?.tier); }
-  get sentence() { return matchSentence(this.relevance?.matches); }
+  get sentence() { return explanation(this.relevance); }
 }

@@ -14,6 +14,7 @@ const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, 
 const { SECTORS, recommendationFor } = require('./sector_profiles');
 const profiles = require('./profiles');
 const { recomputeProfile } = require('./relevance');
+const { generateProse } = require('./relevance_prose');
 
 const CONFIG_BY_NAME = configByName();
 
@@ -150,6 +151,16 @@ function createApp(store) {
     const id = parseId(req.params.id);
     if (!id || !(await profiles.deleteProfile(store, id))) return res.status(404).json({ error: 'not found' });
     res.status(204).end();
+  }));
+
+  // Separate from the deterministic recompute on purpose: this one needs Ollama, takes minutes
+  // rather than a second, and its failure must never look like a scoring failure.
+  app.post('/api/profiles/:id/relevance/prose', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+    generateProse(store, id).catch(() => {});
+    res.status(202).json({ started: true, profileVersion: profile.profile_version });
   }));
 
   app.post('/api/profiles/:id/relevance/recompute', h(async (req, res) => {
@@ -343,14 +354,17 @@ function createApp(store) {
     // between recomputes) is treated as not_yours: it sorts last but is never dropped, and the
     // caller never has to handle a null tier.
     let relJoin = '';
-    let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches';
+    let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches, NULL::text AS rel_sentence';
     let orderBy = 'ORDER BY COALESCE(items.published_at, items.fetched_at) DESC';
     if (profile) {
       const pid = ph(profile.id);
       const pver = ph(profile.profile_version);
       relJoin = `LEFT JOIN item_relevance ir
-                   ON ir.item_id = items.id AND ir.profile_id = ${pid} AND ir.profile_version = ${pver}`;
-      relSelect = "COALESCE(ir.tier, 'not_yours') AS rel_tier, COALESCE(ir.matches, '[]'::jsonb) AS rel_matches";
+                   ON ir.item_id = items.id AND ir.profile_id = ${pid} AND ir.profile_version = ${pver}
+                 LEFT JOIN item_relevance_prose irp
+                   ON irp.item_id = items.id AND irp.profile_id = ${pid} AND irp.profile_version = ${pver}`;
+      relSelect = "COALESCE(ir.tier, 'not_yours') AS rel_tier, COALESCE(ir.matches, '[]'::jsonb) AS rel_matches, "
+        + 'irp.sentence AS rel_sentence';
       // Rank, don't hide — opt-in only.
       if (req.query.relevantOnly === '1') where.push("COALESCE(ir.tier, 'not_yours') IN ('act_now','watch')");
       orderBy = `ORDER BY CASE COALESCE(ir.tier, 'not_yours')
@@ -379,9 +393,15 @@ function createApp(store) {
     `, params);
 
     for (const row of rows) {
-      row.relevance = profile ? { tier: row.rel_tier, matches: row.rel_matches } : null;
+      // `sentence` is the model's wording and is null whenever it has not been written — the
+      // frontend falls back to the templated sentence built from `matches`, so an unreachable
+      // Ollama degrades the phrasing and nothing else.
+      row.relevance = profile
+        ? { tier: row.rel_tier, matches: row.rel_matches, sentence: row.rel_sentence ?? null }
+        : null;
       delete row.rel_tier;
       delete row.rel_matches;
+      delete row.rel_sentence;
     }
     // Total lives in a header so the body stays a bare array (stable contract); the
     // CORS layer exposes X-Total-Count so a cross-origin Angular grid can read it.

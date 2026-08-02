@@ -75,3 +75,12 @@ export function matchSentence(matches: RelevanceMatch[] | null | undefined): str
 export function relevanceTier(relevance: Relevance | null | undefined): string | null {
   return relevance?.tier ?? null;
 }
+
+// What the user actually reads. The model's wording wins when it exists; otherwise the
+// deterministic template does the job. Both describe the same verdict — the tier was decided
+// before either was written.
+export function explanation(relevance: Relevance | null | undefined): string {
+  const sentence = relevance?.sentence?.trim();
+  if (sentence) return sentence;
+  return matchSentence(relevance?.matches);
+}

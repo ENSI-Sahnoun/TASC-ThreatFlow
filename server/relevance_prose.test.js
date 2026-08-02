@@ -159,6 +159,8 @@ test('isUsableSentence rejects echoed prompt scaffolding', () => {
     'This security report is relevant to a reader in the finance sector.',
     '{"sentence": "your one sentence here"}',
     'Answer with JSON in exactly this form.',
+    // The fictional vendor from the one-shot example, asserted as fact about the reader.
+    'You run Acme VPN, so this critical flaw is directly exposed in your environment.',
   ]) {
     assert.strictEqual(isUsableSentence(s), false, `should reject: ${s}`);
   }
