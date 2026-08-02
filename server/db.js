@@ -130,6 +130,31 @@ async function applySchema(s = store) {
     );
     CREATE INDEX IF NOT EXISTS idx_item_quality_verdict ON item_quality(verdict);
 
+    -- Model-derived enrichment. Each lives in its own table and NOTHING in the deterministic
+    -- pipeline reads them: items.severity, items.industry and items.summary keep whatever the
+    -- upstream source actually said, so a model guess can never be mistaken for vendor data or
+    -- feed confidence/consolidation scoring. A row's existence means "checked"; its columns may
+    -- still be NULL, which means "checked and found nothing" rather than "not looked at".
+    CREATE TABLE IF NOT EXISTS item_severity_ml (
+      item_id     INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      severity    TEXT,
+      model       TEXT NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS item_summary_ml (
+      item_id     INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      summary     TEXT,
+      model       TEXT NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS item_victim_ml (
+      item_id     INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      sector      TEXT,
+      region      TEXT,
+      model       TEXT NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS item_relevance_prose (
       profile_id      INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
       item_id         INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
