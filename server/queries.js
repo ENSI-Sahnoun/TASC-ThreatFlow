@@ -280,4 +280,26 @@ async function iocRows(store, filters = {}) {
       LIMIT 5000`, params);
 }
 
-module.exports = { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, COVERAGE_FIELDS, DEFAULT_MAX_AGE_DAYS, maxAgeClause };
+// Autocomplete source for the onboarding survey's tech-stack step. Reads item_cpes (2,706
+// distinct vendors) rather than items.vendor, which is populated on under 1% of rows and holds
+// 34 values — a survey built on the latter would offer almost nothing to pick.
+//
+// `kind` selects a column name, so it is resolved through a whitelist rather than interpolated:
+// an unknown value falls back to 'vendor' instead of reaching SQL.
+async function cpeFacets(store, { q = '', kind = 'vendor', limit } = {}) {
+  const col = kind === 'product' ? 'product' : 'vendor';
+  const lim = clampedInt(limit, 50, 1, 200);
+  const params = [lim];
+  let where = '';
+  const term = typeof q === 'string' ? q.trim() : '';
+  if (term) {
+    params.push(`%${term.toLowerCase()}%`);
+    where = `WHERE ${col} LIKE $${params.length}`;
+  }
+  return store.all(
+    `SELECT ${col} AS value, count(*)::int AS refs
+       FROM item_cpes ${where}
+      GROUP BY 1 ORDER BY refs DESC, value ASC LIMIT $1`, params);
+}
+
+module.exports = { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, cpeFacets, COVERAGE_FIELDS, DEFAULT_MAX_AGE_DAYS, maxAgeClause };
