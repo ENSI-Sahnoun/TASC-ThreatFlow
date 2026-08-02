@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { makeTempDb } = require('./test-helpers');
-const { syncSource } = require('./fetchers');
+const { syncSource, writeItem } = require('./fetchers');
+const { enrichItem } = require('./enrich');
 
 async function insertSource(store, s) {
   const row = await store.get(
@@ -165,4 +166,41 @@ test('syncSource corrects a stale category on an existing row when re-synced', a
     const item = await store.get('SELECT category FROM items WHERE source_id = $1', [id]);
     assert.strictEqual(item.category, 'data-breach');
   } finally { await cleanup(); }
+});
+
+test('writeItem persists item_cpes and re-writing replaces them', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('cpe-src','json_api',true) RETURNING id");
+    const item = { external_id: 'CVE-2026-1', category: 'cve', title: 'CVE-2026-1', raw: null, native: {} };
+    const enr = {
+      cves: [], iocs: [], actors: [], families: [], domains: [],
+      severity: null, cvssScore: null, cvssVersion: null, epssScore: null,
+      exploitationStatus: null, vendor: null, region: null, industry: null, threatType: null,
+      cpes: [{ part: 'a', vendor: 'fortinet', product: 'fortios' }],
+    };
+    await store.tx(async (t) => { await writeItem(t, src.id, item, enr); });
+    let rows = await store.all('SELECT part, vendor, product FROM item_cpes ORDER BY product');
+    assert.deepStrictEqual(rows, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
+
+    // A later sync of the same external_id must replace, not accumulate.
+    enr.cpes = [{ part: 'o', vendor: 'ibm', product: 'aix' }];
+    await store.tx(async (t) => { await writeItem(t, src.id, item, enr); });
+    rows = await store.all('SELECT part, vendor, product FROM item_cpes ORDER BY product');
+    assert.deepStrictEqual(rows, [{ part: 'o', vendor: 'ibm', product: 'aix' }]);
+  } finally { await cleanup(); }
+});
+
+test('enrichItem passes native.cpes through', () => {
+  const enr = enrichItem({
+    category: 'cve', title: 'x', summary: '',
+    native: { cpes: [{ part: 'a', vendor: 'fortinet', product: 'fortios' }] },
+  });
+  assert.deepStrictEqual(enr.cpes, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
+});
+
+test('enrichItem defaults cpes to an empty array', () => {
+  const enr = enrichItem({ category: 'news', title: 'x', summary: '', native: {} });
+  assert.deepStrictEqual(enr.cpes, []);
 });

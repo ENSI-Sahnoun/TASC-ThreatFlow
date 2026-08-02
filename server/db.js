@@ -72,6 +72,16 @@ async function applySchema(s = store) {
     CREATE TABLE IF NOT EXISTS item_domains (item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE, domain TEXT NOT NULL, UNIQUE(item_id, domain));
     CREATE INDEX IF NOT EXISTS idx_item_domains_domain ON item_domains(domain);
 
+    CREATE TABLE IF NOT EXISTS item_cpes (
+      item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      part    TEXT NOT NULL,
+      vendor  TEXT NOT NULL,
+      product TEXT NOT NULL,
+      UNIQUE(item_id, part, vendor, product)
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_cpes_vendor  ON item_cpes(vendor);
+    CREATE INDEX IF NOT EXISTS idx_item_cpes_product ON item_cpes(product);
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,

@@ -76,7 +76,7 @@ async function writeItem(t, sourceId, item, enr) {
   const isNew = inserted.inserted === true;
 
   // Enrichment child rows are idempotent: clear then re-insert for this item.
-  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains']) {
+  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains', 'item_cpes']) {
     await t.run(`DELETE FROM ${tbl} WHERE item_id = $1`, [itemId]);
   }
   for (const c of enr.cves) await t.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, c]);
@@ -84,6 +84,10 @@ async function writeItem(t, sourceId, item, enr) {
   for (const a of enr.actors) await t.run('INSERT INTO item_actors (item_id, actor) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, a]);
   for (const f of enr.families) await t.run('INSERT INTO item_malware_families (item_id, family) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, f]);
   for (const d of enr.domains) await t.run('INSERT INTO item_domains (item_id, domain) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, d]);
+  for (const c of enr.cpes || []) {
+    await t.run('INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+      [itemId, c.part, c.vendor, c.product]);
+  }
   return { itemId, isNew };
 }
 
@@ -167,4 +171,4 @@ async function syncSource(source, opts = {}) {
   }
 }
 
-module.exports = { syncSource, loadKevCveSet, normalizeDate };
+module.exports = { syncSource, writeItem, loadKevCveSet, normalizeDate };

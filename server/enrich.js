@@ -95,6 +95,7 @@ function enrichItem(item, { kevCveSet } = { kevCveSet: new Set() }) {
     actors,
     families,
     domains: domainList,
+    cpes: native.cpes || [],
     severity,
     cvssScore,
     epssScore: native.epssScore != null ? Number(native.epssScore) : null,
