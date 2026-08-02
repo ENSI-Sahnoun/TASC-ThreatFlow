@@ -388,8 +388,75 @@ All fields are quoted and embedded quotes are escaped per RFC 4180.
 
 ---
 
+## Profiles
+
+Profiles are **personas, not accounts** — no password, no session, and no security boundary
+between them. Anyone reaching the API can select any profile; the loopback bind in
+`server/index.js` is what keeps the unauthenticated API safe.
+
+### `X-Profile-Id` header
+
+Sent by the frontend on every `/api/*` call to name the active profile. `?profileId=` is
+accepted as a fallback for direct API testing. An unknown, negative or non-integer value
+returns `400` — never a `500`, and never a silent fallback to "no profile".
+
+### `GET /api/profiles`
+
+All profiles, newest first.
+
+### `POST /api/profiles`
+
+Creates a profile from the onboarding survey payload:
+`{ name, sector, vendors[], products[], threatDomains[], region, severityFloor }`.
+
+`201` with the created row. `400` when the sector is unknown, a threat domain is not in
+`GET /api/domains`, the severity floor is not a known severity, a vendor/product entry is not a
+CPE-shaped slug, the name is blank, or the name is already taken.
+
+`vendors` and `products` are **CPE slugs** matched against `item_cpes`, lowercased and
+de-duplicated on write. Free text that matches no slug is rejected rather than stored, because
+it could never match an item.
+
+### `GET /api/profiles/:id`
+
+The profile, or `404`.
+
+### `PUT /api/profiles/:id`
+
+Replaces the profile and **increments `profile_version` on every save**, including saves whose
+content is unchanged — it is the cache key for relevance verdicts, so an edit must invalidate
+them. `202` (saved; any recompute runs in the background), `400` on validation failure, `404`
+for an unknown id.
+
+### `DELETE /api/profiles/:id`
+
+`204`, or `404` for an unknown id.
+
+### `GET /api/sectors`
+
+The ten sectors, each with a `recommendation` of `{ vendors, products, threatDomains,
+severityFloor }` used to preselect the survey's recommended step. Every vendor slug is verified
+to exist in `item_cpes`.
+
+### `GET /api/cpe-facets`
+
+Frequency-ranked autocomplete for the survey's tech-stack step.
+
+- `q` — case-insensitive substring filter
+- `kind` — `vendor` (default) or `product`; any other value falls back to `vendor`
+- `limit` — clamped to 1–200, default 50
+
+Response: `[{ "value": "fortinet", "refs": 23 }]`, ordered by `refs` descending.
+
+Reads `item_cpes` (2,700+ distinct vendors), **not** `items.vendor`, which is populated on under
+1% of rows and holds 34 distinct values.
+
+---
+
 ## Conventions
 
 - IDs are positive integers; non-integer `:id` params return `404` (not a 500).
-- All handlers wrapped so rejected promises become `500 { error }` instead of crashing the process.
+- All handlers wrapped so rejected promises become `500 { error }` instead of crashing the
+  process — except errors carrying a numeric `status`, which keep that code (used for the
+  `400` on an unknown `X-Profile-Id`).
 - `assertSafeUrl` runs on every user-supplied source URL (create + update) — blocks SSRF including bracketed IPv6 literals.
