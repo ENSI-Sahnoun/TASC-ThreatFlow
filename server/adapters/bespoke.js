@@ -1,5 +1,7 @@
 const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
+const { metricFromNvd, scoreFromVector, severityFromScore } = require('../cvss');
+const { cpesFromRaw } = require('../cpe');
 
 const kev = {
   async fetch(source, ctx) {
@@ -134,7 +136,15 @@ const msrc = {
   },
 };
 
-const NVD_WINDOW_DAYS = 120;
+// Pass 1 covers newly published CVEs. NVD publishes roughly 40k CVEs/year, so 45 days is
+// ~5k records — inside NVD_MAX_PAGES * NVD_RESULTS_PER_PAGE. The previous 120-day window
+// would be ~13k and would silently truncate.
+const NVD_PUB_WINDOW_DAYS = 45;
+// Pass 2 catches meaningful re-scores (a 2025 CVE raised to critical this week) without
+// re-importing NVD's 1990s-2000s backlog, which is what a bare lastMod query returns:
+// before this change, 2002 contributed 2,156 stored rows and 2017 contributed 19.
+const NVD_MOD_WINDOW_DAYS = 14;
+const NVD_MOD_MAX_AGE_YEARS = 2;
 const NVD_RESULTS_PER_PAGE = 2000;
 const NVD_MAX_PAGES = 5;
 
@@ -142,30 +152,50 @@ const nvdCve = {
   async fetch(source, ctx) {
     const fmt = (d) => d.toISOString().replace('Z', '');
     const now = ctx.now ? ctx.now() : new Date();
-    const windowStart = new Date(now - NVD_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     const headers = source.api_key ? { apiKey: source.api_key } : {};
     const sleep = ctx.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     // NVD rate limit is 5 req/30s unauthenticated, 50 req/30s with an apiKey.
     const delayMs = source.api_key ? 700 : 6500;
+    const daysAgo = (n) => new Date(now - n * 24 * 60 * 60 * 1000);
 
-    const vulns = [];
-    let startIndex = 0;
-    for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
-      const url = `${source.url}?lastModStartDate=${fmt(windowStart)}&lastModEndDate=${fmt(now)}&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
-      const res = await ctx.request(url, { timeoutMs: 20000, headers });
-      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-      const body = JSON.parse(res.body);
-      vulns.push(...(body.vulnerabilities || []));
-      const totalResults = body.totalResults || 0;
-      startIndex += NVD_RESULTS_PER_PAGE;
-      if (startIndex >= totalResults) break;
-      await sleep(delayMs);
+    async function collect(startParam, endParam, since) {
+      const out = [];
+      let startIndex = 0;
+      for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
+        const url = `${source.url}?${startParam}=${fmt(since)}&${endParam}=${fmt(now)}`
+          + `&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
+        const res = await ctx.request(url, { timeoutMs: 20000, headers });
+        if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+        const body = JSON.parse(res.body);
+        out.push(...(body.vulnerabilities || []));
+        const totalResults = body.totalResults || 0;
+        startIndex += NVD_RESULTS_PER_PAGE;
+        if (startIndex >= totalResults) break;
+        await sleep(delayMs);
+      }
+      return out;
     }
 
-    return vulns.filter((v) => v.cve && v.cve.id).map((v) => {
+    const published = await collect('pubStartDate', 'pubEndDate', daysAgo(NVD_PUB_WINDOW_DAYS));
+    await sleep(delayMs);
+    const modified = await collect('lastModStartDate', 'lastModEndDate', daysAgo(NVD_MOD_WINDOW_DAYS));
+
+    const maxAge = new Date(now);
+    maxAge.setFullYear(maxAge.getFullYear() - NVD_MOD_MAX_AGE_YEARS);
+    const fresh = modified.filter((v) => {
+      const p = v.cve && v.cve.published;
+      return p && new Date(p) >= maxAge;
+    });
+
+    const byId = new Map();
+    for (const v of [...published, ...fresh]) {
+      if (v.cve && v.cve.id && !byId.has(v.cve.id)) byId.set(v.cve.id, v);
+    }
+
+    return [...byId.values()].map((v) => {
       const cve = v.cve;
       const desc = (cve.descriptions || []).find((d) => d.lang === 'en');
-      const metric = cve.metrics?.cvssMetricV31?.[0]?.cvssData || cve.metrics?.cvssMetricV30?.[0]?.cvssData || null;
+      const metric = metricFromNvd(cve.metrics);
       return normalizedItem({
         external_id: cve.id,
         title: cve.id,
@@ -175,7 +205,13 @@ const nvdCve = {
         published_at: cve.published || null,
         category: 'cve',
         raw: cve,
-        native: { cveIds: [cve.id], cvssScore: metric ? metric.baseScore : null, severity: metric ? String(metric.baseSeverity || '').toLowerCase() || null : null },
+        native: {
+          cveIds: [cve.id],
+          cvssScore: metric ? metric.score : null,
+          cvssVersion: metric ? metric.version : null,
+          severity: metric ? metric.severity : null,
+          cpes: cpesFromRaw(cve),
+        },
       });
     });
   },

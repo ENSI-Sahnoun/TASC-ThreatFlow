@@ -98,7 +98,7 @@ test('vulnetix merges /exploits into a matching /gcve CVE and adds exploits-only
   assert.strictEqual(exploitsOnly.author, 'CISA');
 });
 
-test('nvd_cve paginates a wider window and passes an apiKey header when present', async () => {
+test('nvd_cve paginates the publication pass and passes an apiKey header when present', async () => {
   const page0 = JSON.stringify({
     totalResults: 2500,
     vulnerabilities: [{ cve: { id: 'CVE-2026-0001', descriptions: [{ lang: 'en', value: 'First page.' }], published: '2026-06-01T00:00:00.000' } }],
@@ -107,22 +107,25 @@ test('nvd_cve paginates a wider window and passes an apiKey header when present'
     totalResults: 2500,
     vulnerabilities: [{ cve: { id: 'CVE-2026-0002', descriptions: [{ lang: 'en', value: 'Second page.' }], published: '2026-06-02T00:00:00.000' } }],
   });
-  const seenUrls = [];
+  const empty = JSON.stringify({ totalResults: 0, vulnerabilities: [] });
+  const pubUrls = [];
   const seenHeaders = [];
   const source = { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0', api_key: 'nvd-key' };
   const ctx = {
     now: () => new Date('2026-07-30T00:00:00Z'),
     sleep: async () => {},
     request: async (url, opts) => {
-      seenUrls.push(url);
       seenHeaders.push(opts.headers);
-      return { status: 200, headers: {}, body: seenUrls.length === 1 ? page0 : page1 };
+      if (!url.includes('pubStartDate')) return { status: 200, headers: {}, body: empty };
+      pubUrls.push(url);
+      return { status: 200, headers: {}, body: pubUrls.length === 1 ? page0 : page1 };
     },
   };
   const items = await bespoke.nvd_cve.fetch(source, ctx);
-  assert.strictEqual(seenUrls.length, 2);
-  assert.match(seenUrls[0], /lastModStartDate=2026-04-01T00:00:00\.000&lastModEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
-  assert.match(seenUrls[1], /startIndex=2000/);
+  assert.strictEqual(pubUrls.length, 2, 'pass 1 paginates past startIndex 0');
+  // 45-day publication window ending at now — not the old 120-day lastMod window.
+  assert.match(pubUrls[0], /pubStartDate=2026-06-15T00:00:00\.000&pubEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
+  assert.match(pubUrls[1], /startIndex=2000/);
   assert.strictEqual(seenHeaders[0].apiKey, 'nvd-key');
   assert.strictEqual(items.length, 2);
   assert.strictEqual(items[0].external_id, 'CVE-2026-0001');
@@ -178,4 +181,66 @@ test('dshield builds one item per attacking IP with rank/reports/targets, no per
   assert.strictEqual(items[0].published_at, '2026-07-30T00:00:00.000Z');
   assert.deepStrictEqual(items[0].native.iocs, [{ type: 'ip', value: '13.94.254.200' }]);
   assert.strictEqual(items[0].category, 'ioc');
+});
+
+function nvdCtx(byUrl) {
+  const calls = [];
+  return {
+    calls,
+    now: () => new Date('2026-08-02T00:00:00Z'),
+    sleep: async () => {},
+    request: async (url) => {
+      calls.push(url);
+      const key = url.includes('pubStartDate') ? 'pub' : 'mod';
+      return { status: 200, headers: {}, body: JSON.stringify(byUrl[key] || { vulnerabilities: [], totalResults: 0 }) };
+    },
+  };
+}
+
+function nvdRecord(id, published, extra = {}) {
+  return { cve: { id, published, descriptions: [{ lang: 'en', value: `${id} description` }], ...extra } };
+}
+
+test('nvd_cve runs a pubStartDate pass and a lastMod pass', async () => {
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [nvdRecord('CVE-2026-1', '2026-07-20T00:00:00')], totalResults: 1 },
+    mod: { vulnerabilities: [nvdRecord('CVE-2025-9', '2025-04-01T00:00:00')], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.ok(ctx.calls.some((u) => u.includes('pubStartDate')));
+  assert.ok(ctx.calls.some((u) => u.includes('lastModStartDate')));
+  assert.deepStrictEqual(items.map((i) => i.external_id).sort(), ['CVE-2025-9', 'CVE-2026-1']);
+});
+
+// The whole point of the change: the lastMod pass must not re-import the backlog.
+test('nvd_cve discards lastMod records published beyond the age cap', async () => {
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [], totalResults: 0 },
+    mod: { vulnerabilities: [nvdRecord('CVE-2002-1', '2002-03-01T00:00:00')], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.deepStrictEqual(items, []);
+});
+
+test('nvd_cve de-duplicates a CVE returned by both passes', async () => {
+  const rec = nvdRecord('CVE-2026-1', '2026-07-20T00:00:00');
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [rec], totalResults: 1 },
+    mod: { vulnerabilities: [rec], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.strictEqual(items.length, 1);
+});
+
+test('nvd_cve extracts v2 metrics and CPEs', async () => {
+  const rec = nvdRecord('CVE-2026-2', '2026-07-20T00:00:00', {
+    metrics: { cvssMetricV2: [{ cvssData: { baseScore: 5.0 }, baseSeverity: 'MEDIUM' }] },
+    configurations: [{ nodes: [{ cpeMatch: [{ criteria: 'cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*' }] }] }],
+  });
+  const ctx = nvdCtx({ pub: { vulnerabilities: [rec], totalResults: 1 }, mod: { vulnerabilities: [], totalResults: 0 } });
+  const [item] = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.strictEqual(item.native.cvssScore, 5.0);
+  assert.strictEqual(item.native.cvssVersion, '2.0');
+  assert.strictEqual(item.native.severity, 'medium');
+  assert.deepStrictEqual(item.native.cpes, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
 });
