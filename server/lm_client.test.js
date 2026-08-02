@@ -105,3 +105,27 @@ test('judgeText never throws past the client', async () => {
     assert.strictEqual(await judgeText('p', { schema: SCHEMA, request, retries: 0 }), null);
   }
 });
+
+// Models routinely emit {"a":""} instead of {} — on an optional field that means "absent",
+// and treating it as fatal threw away 20 of 25 valid extractions in the victim job.
+test('an empty string on an optional field means absent, not failure', () => {
+  const schema = { sector: { type: 'string', optional: true }, region: { type: 'string', optional: true } };
+  assert.deepStrictEqual(parseReply(JSON.stringify({ response: '{"sector":"","region":""}' }), schema), {});
+  assert.deepStrictEqual(
+    parseReply(JSON.stringify({ response: '{"sector":"finance","region":""}' }), schema),
+    { sector: 'finance' });
+});
+
+test('an empty string on a required field still rejects the whole reply', () => {
+  const schema = { sentence: { type: 'string' } };
+  assert.strictEqual(parseReply(JSON.stringify({ response: '{"sentence":""}' }), schema), null);
+});
+
+// Models return an enum value in whatever casing they like; rejecting on case alone discards
+// answers that are correct in substance.
+test('enum matching is case-insensitive and returns the canonical spelling', () => {
+  const schema = { sector: { type: 'string', enum: ['finance', 'technology-saas'] } };
+  assert.deepStrictEqual(parseReply(JSON.stringify({ response: '{"sector":"Finance"}' }), schema), { sector: 'finance' });
+  assert.deepStrictEqual(parseReply(JSON.stringify({ response: '{"sector":"Technology-SaaS"}' }), schema), { sector: 'technology-saas' });
+  assert.strictEqual(parseReply(JSON.stringify({ response: '{"sector":"banking"}' }), schema), null);
+});

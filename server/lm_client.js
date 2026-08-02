@@ -57,10 +57,26 @@ function validate(obj, schema) {
     if (rule.type && typeof value !== rule.type) return null;
     if (rule.type === 'string') {
       const s = value.trim();
-      // An empty string is not an answer — it is the model declining without saying so.
-      if (!s) return null;
+      // An empty string on a REQUIRED field is not an answer — it is the model declining
+      // without saying so, and the whole reply is rejected.
+      //
+      // On an OPTIONAL field it means exactly what omitting the key would have meant. Models
+      // routinely emit {"sector":"","country":""} instead of {}, and treating that as a fatal
+      // error discarded 20 of 25 otherwise-valid victim extractions.
+      if (!s) {
+        if (rule.optional) continue;
+        return null;
+      }
       if (rule.maxLength && s.length > rule.maxLength) return null;
-      if (rule.enum && !rule.enum.includes(s)) return null;
+      if (rule.enum) {
+        // Match case-insensitively and return the canonical spelling. Models emit "Finance" or
+        // "Technology-SaaS" for an enum written in lowercase, and rejecting those on casing
+        // alone throws away answers that are correct in substance.
+        const canonical = rule.enum.find((e) => e.toLowerCase() === s.toLowerCase());
+        if (!canonical) return null;
+        out[key] = canonical;
+        continue;
+      }
       out[key] = s;
       continue;
     }
