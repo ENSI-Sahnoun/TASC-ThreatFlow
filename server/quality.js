@@ -6,15 +6,26 @@
 // only by the presentation layer, which demotes; a misclassification costs an item its ranking,
 // never its existence. And per the usual rule, a failed call writes nothing at all.
 //
-// MODEL CAPABILITY WARNING. This task needs a model that can actually discriminate.
-// EuroLLM-1.7B-Instruct cannot: measured 2026-08-02 it answered "intel" for 100% of inputs
-// across two structurally different prompts, including headlines quoted verbatim in its own
-// prompt as counter-examples ("Weekly Recap: …" -> roundup). A degenerate single-verdict run is
-// worse than no data, because it looks like signal.
+// MEASURED CAPABILITY (2026-08-02, 11 held-out real headlines labelled by hand).
+//
+// mistral:7b-instruct-q3_K_S — 7/11 overall. The numbers that matter for a demote-only
+// feature: 0 of 6 genuine intel items were demoted, 2 of 5 junk items were caught, and both
+// items it flagged as junk really were junk. So it is CONSERVATIVE: it misses most noise but
+// does not bury real intelligence. Do not present it as comprehensive filtering.
+//
+// EuroLLM-1.7B-Instruct — unusable. It answered "intel" for 100% of inputs across two
+// structurally different prompts, including headlines quoted verbatim in its own prompt as
+// counter-examples. A degenerate single-verdict run is worse than no data, because it looks
+// like signal.
 //
 // Before trusting a run, check the returned `counts`: if one verdict holds essentially
 // everything, the model is not classifying and the rows should be discarded rather than shown.
-// Verified working models should be recorded here as they are confirmed.
+//
+// A WARNING FOR ANYONE TUNING THIS PROMPT. Rewriting the flat category list into ordered
+// "check for digest, then talk, then announcement, else intel" exclusion tests scored 6/8 on
+// the eight cases it was designed against and 4/11 on held-out data — worse than this prompt,
+// and barely above the 25% four-class chance line. The bias did not disappear, it moved from
+// "always intel" to "always roundup". Measure any change on headlines you did not tune against.
 const { judgeText, DEFAULT_MODEL } = require('./lm_client');
 
 const VERDICTS = ['intel', 'roundup', 'commentary', 'promotion'];
