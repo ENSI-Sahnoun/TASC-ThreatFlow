@@ -83,6 +83,22 @@ async function applySchema(s = store) {
     CREATE INDEX IF NOT EXISTS idx_item_cpes_vendor  ON item_cpes(vendor);
     CREATE INDEX IF NOT EXISTS idx_item_cpes_product ON item_cpes(product);
 
+    -- Profiles are personas, not accounts: no password, no session, no boundary between them.
+    -- The loopback bind below is what keeps the unauthenticated API safe.
+    CREATE TABLE IF NOT EXISTS profiles (
+      id              INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      name            TEXT NOT NULL UNIQUE,
+      sector          TEXT NOT NULL,
+      vendors         TEXT[] NOT NULL DEFAULT '{}',
+      products        TEXT[] NOT NULL DEFAULT '{}',
+      threat_domains  TEXT[] NOT NULL DEFAULT '{}',
+      region          TEXT,
+      severity_floor  TEXT NOT NULL DEFAULT 'medium',
+      profile_version INT NOT NULL DEFAULT 1,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,
