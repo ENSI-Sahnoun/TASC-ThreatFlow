@@ -84,3 +84,26 @@ export function explanation(relevance: Relevance | null | undefined): string {
   if (sentence) return sentence;
   return matchSentence(relevance?.matches);
 }
+
+// Short badge for a demoted item. `intel` and an absent verdict both render nothing — the
+// common case should add no visual noise at all.
+const QUALITY_LABELS: Record<string, string> = {
+  roundup: 'digest',
+  commentary: 'opinion',
+  promotion: 'vendor',
+};
+
+export function qualityLabel(verdict: string | null | undefined): string | null {
+  return (verdict && QUALITY_LABELS[verdict]) || null;
+}
+
+// Explains the badge on hover. Says who decided and how confident to be — the classifier is
+// conservative and occasionally wrong, and the tooltip should not pretend otherwise.
+export function qualityHint(verdict: string | null | undefined): string {
+  const label = qualityLabel(verdict);
+  if (!label) return '';
+  const what = verdict === 'roundup' ? 'a digest of several stories'
+    : verdict === 'commentary' ? 'opinion or analysis rather than a report of an incident'
+      : 'a product, funding or vendor announcement';
+  return `Classified by a local model as ${what}. Ranked lower, not hidden — open it if you disagree.`;
+}

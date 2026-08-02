@@ -10,9 +10,13 @@
 // Nothing in this module ever throws past its own boundary.
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-// EuroLLM-1.7B-Instruct: Horizon-Europe funded (Unbabel / Instituto Superior Técnico /
-// Edinburgh), trained across the 24 EU official languages, ~1GB at Q4_K_M.
-const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'hf.co/mradermacher/EuroLLM-1.7B-Instruct-GGUF:Q4_K_M';
+// Mistral 7B Instruct (Mistral AI, Paris) at q3_K_S, ~3.2GB.
+//
+// This replaced EuroLLM-1.7B, which could write passable prose but could not classify at all —
+// it returned a single constant verdict for 100% of inputs across two prompt shapes, including
+// headlines quoted verbatim in its own prompt as counter-examples. Anything smaller than ~7B
+// should be re-verified against server/quality.js before being trusted, not assumed to work.
+const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'mistral:7b-instruct-q3_K_S';
 const DEFAULT_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 20000;
 
 function buildRequest(prompt, { model = DEFAULT_MODEL, temperature = 0.2 } = {}) {

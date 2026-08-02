@@ -13,6 +13,7 @@ import { UrlCheckComponent } from '../../ui/url-check.component';
 import { FilterBarComponent, type FilterBarSource } from './filter-bar.component';
 import { toQueryParams, fromQueryParams, type IntelFilters } from '../../core/filters';
 import { relativeTime, compactNumber, isRatedSeverity, categoryToken } from '../../core/format';
+import { qualityLabel, qualityHint } from '../../core/relevance';
 import type { Item, ClusterMember, Facets, IocRow } from '../../core/models';
 
 const PAGE_SIZE = 25;
@@ -109,7 +110,12 @@ const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
       <ng-template #rowTpl let-row>
         <li class="row" [style.grid-template-columns]="GRID_TEMPLATE">
           <a class="hit" [routerLink]="['/intel', row.id]" [attr.aria-label]="'Open ' + row.title"></a>
-          <span class="title">{{ row.title }}</span>
+          <span class="title">
+            {{ row.title }}
+            @if (qualityLabel(row.quality?.verdict); as q) {
+              <span class="qbadge" [title]="qualityHint(row.quality?.verdict)">{{ q }}</span>
+            }
+          </span>
           <span class="cat">
             <span class="cat-dot" [style.--c]="categoryToken(row.category)"></span>{{ row.category }}
           </span>
@@ -206,6 +212,13 @@ const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .cat, .sev, .threat, .time, .conf, .src { font-size: var(--fs-sm); color: var(--ink-2); }
+    /* Deliberately quiet: this marks a ranking decision, not a warning. It sits inline with the
+       title so a scanning eye can skip it, and carries its reasoning in the tooltip. */
+    .qbadge {
+      margin-left: 6px; padding: 1px 6px; border-radius: 999px; cursor: help;
+      font-size: var(--fs-xs); color: var(--ink-2);
+      border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+    }
     .cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cat-dot {
       display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -305,6 +318,8 @@ export class ExplorerComponent {
   compactNumber = compactNumber;
   isRatedSeverity = isRatedSeverity;
   categoryToken = categoryToken;
+  qualityLabel = qualityLabel;
+  qualityHint = qualityHint;
   trackById = (r: Item): number => r.id;
 
   iocClipboardText = computed(() => this.iocRowsForFilters().map((r) => r.value).join('\n'));

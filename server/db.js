@@ -119,6 +119,17 @@ async function applySchema(s = store) {
     -- Model-written prose lives in its own table, never as a column on item_relevance. The
     -- separation is the guardrail: there is no tier column here, so a bad model output is
     -- structurally incapable of changing a verdict. It can only change wording.
+    -- Model-assigned signal quality. Its own table, read only by the presentation layer: the
+    -- deterministic pipeline never consults it, and the UI demotes rather than deletes, so a
+    -- misclassification costs an item its ranking and never its existence.
+    CREATE TABLE IF NOT EXISTS item_quality (
+      item_id     INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      verdict     TEXT NOT NULL CHECK (verdict IN ('intel','roundup','commentary','promotion')),
+      model       TEXT NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_quality_verdict ON item_quality(verdict);
+
     CREATE TABLE IF NOT EXISTS item_relevance_prose (
       profile_id      INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
       item_id         INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
