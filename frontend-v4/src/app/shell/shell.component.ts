@@ -1,4 +1,4 @@
-import { Component, ElementRef, ViewChild, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ElementRef, ViewChild, inject, signal, effect, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { map, catchError, of, filter } from 'rxjs';
@@ -7,12 +7,14 @@ import { ApiService } from '../core/api.service';
 import { ThemeService } from '../core/theme.service';
 import { SyncService } from '../core/sync.service';
 import { CommandPaletteComponent } from './command-palette.component';
+import { ProfileService } from '../core/profile.service';
+import { ProfilePickerComponent } from '../pages/onboarding/profile-picker.component';
 
 @Component({
   selector: 'tf-shell',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, CommandPaletteComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, CommandPaletteComponent, ProfilePickerComponent],
   template: `
     <header class="nav">
       <a routerLink="/" class="brand tf-heading"><img [src]="theme.theme() === 'light' ? 'logo-dark.png' : 'logo.png'" alt="" class="brand-logo" [class.swap]="logoSwapping()" />ThreatFlow</a>
@@ -22,6 +24,7 @@ import { CommandPaletteComponent } from './command-palette.component';
         <a routerLink="/intel" routerLinkActive="on">Intel</a>
         <a routerLink="/check" routerLinkActive="on">Check URL</a>
       </nav>
+      <tf-profile-picker />
       <button
         class="theme-toggle" type="button" (click)="toggleTheme()"
         [attr.aria-label]="theme.theme() === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
@@ -183,6 +186,7 @@ export class ShellComponent {
   private router = inject(Router);
   theme = inject(ThemeService);
   sync = inject(SyncService);
+  profiles = inject(ProfileService);
   paletteOpen = signal(false);
   logoSwapping = signal(false);
   onDashboard = toSignal(
@@ -195,6 +199,17 @@ export class ShellComponent {
     this.api.dashboard().pipe(map((d) => d.sourceHealth), catchError(() => of(null))),
     { initialValue: null },
   );
+
+  constructor() {
+    this.profiles.load();
+    // The gate fires only once the profile list has actually arrived — needsOnboarding() stays
+    // false until then, so a slow response cannot bounce a user who does have profiles.
+    effect(() => {
+      if (this.profiles.needsOnboarding() && !this.router.url.startsWith('/onboarding')) {
+        this.router.navigateByUrl('/onboarding');
+      }
+    });
+  }
 
   @ViewChild('searchBtn') private searchBtn?: ElementRef<HTMLButtonElement>;
 

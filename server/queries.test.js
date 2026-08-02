@@ -180,3 +180,71 @@ test('maxAgeClause defaults a missing value to DEFAULT_MAX_AGE_DAYS', () => {
   assert.ok(maxAgeClause(undefined, ph));
   assert.deepStrictEqual(params, [365]);
 });
+
+const { cpeFacets } = require('./queries');
+
+async function seedCpes(store, rows) {
+  const s = await store.get("INSERT INTO sources (name, fetch_kind) VALUES ('S','json_api') RETURNING id");
+  for (const [i, r] of rows.entries()) {
+    const item = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'cve',$2,$2, now()) RETURNING id`, [s.id, `CVE-2026-${i}`]);
+    await store.run('INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,$2,$3,$4)',
+      [item.id, r.part || 'a', r.vendor, r.product]);
+  }
+}
+
+test('cpeFacets ranks vendors by reference count', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpes(store, [
+      { vendor: 'microsoft', product: 'windows' },
+      { vendor: 'microsoft', product: 'office' },
+      { vendor: 'fortinet', product: 'fortios' },
+    ]);
+    assert.deepStrictEqual(await cpeFacets(store, { kind: 'vendor' }),
+      [{ value: 'microsoft', refs: 2 }, { value: 'fortinet', refs: 1 }]);
+  } finally { await cleanup(); }
+});
+
+test('cpeFacets filters case-insensitively by substring', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpes(store, [
+      { vendor: 'microsoft', product: 'windows' },
+      { vendor: 'fortinet', product: 'fortios' },
+    ]);
+    assert.deepStrictEqual(await cpeFacets(store, { kind: 'vendor', q: 'FORT' }),
+      [{ value: 'fortinet', refs: 1 }]);
+  } finally { await cleanup(); }
+});
+
+test('cpeFacets returns products when asked', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpes(store, [{ vendor: 'fortinet', product: 'fortios' }]);
+    assert.deepStrictEqual(await cpeFacets(store, { kind: 'product' }), [{ value: 'fortios', refs: 1 }]);
+  } finally { await cleanup(); }
+});
+
+// kind selects a column name, so it must never reach SQL uninspected.
+test('cpeFacets defaults an unknown kind to vendor', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpes(store, [{ vendor: 'fortinet', product: 'fortios' }]);
+    assert.deepStrictEqual(await cpeFacets(store, { kind: 'vendor; DROP TABLE items' }),
+      [{ value: 'fortinet', refs: 1 }]);
+    assert.strictEqual((await store.all('SELECT 1 FROM items')).length, 1, 'items table survived');
+  } finally { await cleanup(); }
+});
+
+test('cpeFacets clamps limit', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpes(store, [
+      { vendor: 'a1', product: 'p' }, { vendor: 'b2', product: 'p' }, { vendor: 'c3', product: 'p' },
+    ]);
+    assert.strictEqual((await cpeFacets(store, { kind: 'vendor', limit: 2 })).length, 2);
+    assert.ok((await cpeFacets(store, { kind: 'vendor', limit: 99999 })).length <= 3);
+  } finally { await cleanup(); }
+});

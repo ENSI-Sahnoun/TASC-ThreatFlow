@@ -10,7 +10,9 @@ const { dashboardStats } = require('./stats');
 const { normalizeUrl } = require('./urlnorm');
 const { consolidate } = require('./consolidate');
 const { startScheduler } = require('./scheduler');
-const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, maxAgeClause } = require('./queries');
+const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, cpeFacets, maxAgeClause } = require('./queries');
+const { SECTORS, recommendationFor } = require('./sector_profiles');
+const profiles = require('./profiles');
 
 const CONFIG_BY_NAME = configByName();
 
@@ -73,9 +75,72 @@ function createApp(store) {
 
   // Wrap async handlers so a rejected promise becomes a 500 instead of an unhandled
   // rejection that crashes the process.
+  // An error carrying a numeric `status` is a caller error (e.g. an unknown X-Profile-Id) and
+  // keeps that code; everything else is a server fault and becomes a 500.
   const h = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
-    if (!res.headersSent) res.status(500).json({ error: String(err.message || err) });
+    const status = Number.isInteger(err && err.status) ? err.status : 500;
+    if (!res.headersSent) res.status(status).json({ error: String(err.message || err) });
   });
+
+  // Profiles are personas, not accounts — no password, no session, no boundary between them.
+  // Anyone reaching the API can select any profile; the loopback bind is what keeps that safe.
+  // Phase 2's relevance scoring reads the active profile from here.
+  async function resolveProfile(req) {
+    const raw = req.get('X-Profile-Id') || req.query.profileId;
+    if (raw == null || raw === '') return null;
+    const profile = await profiles.getProfile(store, raw);
+    if (!profile) { const e = new Error('unknown profile'); e.status = 400; throw e; }
+    return profile;
+  }
+
+  app.get('/api/sectors', h(async (req, res) => {
+    res.json(SECTORS.map((s) => ({ ...s, recommendation: recommendationFor(s.slug) })));
+  }));
+
+  app.get('/api/cpe-facets', h(async (req, res) => {
+    res.json(await cpeFacets(store, { q: req.query.q, kind: req.query.kind, limit: req.query.limit }));
+  }));
+
+  app.get('/api/profiles', h(async (req, res) => {
+    res.json(await profiles.listProfiles(store));
+  }));
+
+  app.post('/api/profiles', h(async (req, res) => {
+    try {
+      res.status(201).json(await profiles.createProfile(store, req.body || {}));
+    } catch (e) {
+      // Validation and duplicate-name failures are caller errors, not server faults.
+      res.status(400).json({ error: e.message });
+    }
+  }));
+
+  app.get('/api/profiles/:id', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+    res.json(profile);
+  }));
+
+  app.put('/api/profiles/:id', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(404).json({ error: 'not found' });
+    let updated;
+    try {
+      updated = await profiles.updateProfile(store, id, req.body || {});
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (!updated) return res.status(404).json({ error: 'not found' });
+    // 202: the row is saved, but Phase 2's relevance recompute for the new profile_version
+    // runs in the background.
+    res.status(202).json(updated);
+  }));
+
+  app.delete('/api/profiles/:id', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id || !(await profiles.deleteProfile(store, id))) return res.status(404).json({ error: 'not found' });
+    res.status(204).end();
+  }));
 
   app.get('/api/sources', h(async (req, res) => {
     // item_count backs the Arsenal index card grid — one aggregate query for all 43 sources
@@ -200,6 +265,8 @@ function createApp(store) {
   }));
 
   app.get('/api/items', h(async (req, res) => {
+    // Validate the header before any query runs, so a bad profile id fails fast as a 400.
+    await resolveProfile(req);
     const { category, source_id, q, limit } = req.query;
     const params = [];
     const ph = (v) => { params.push(v); return `$${params.length}`; };
