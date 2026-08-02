@@ -167,3 +167,23 @@ test('new v4 endpoints respond', async () => {
     await cleanup();
   }
 });
+
+test('GET /api/items hides items older than a year by default', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const src = await store.get("INSERT INTO sources (name, fetch_kind, active) VALUES ('age','rss',true) RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, external_id, published_at) VALUES
+        ($1,'cve','old CVE','o', now() - interval '10 years'),
+        ($1,'cve','new CVE','n', now() - interval '2 days'),
+        ($1,'cve','undated CVE','u', NULL)`, [src.id]);
+
+    const def = await get(app, '/api/items');
+    assert.deepStrictEqual(def.body.map((r) => r.title).sort(), ['new CVE', 'undated CVE'],
+      'undated rows must survive the age filter');
+
+    const all = await get(app, '/api/items?maxAgeDays=0');
+    assert.strictEqual(all.body.length, 3);
+  } finally { await cleanup(); }
+});

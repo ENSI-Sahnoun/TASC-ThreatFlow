@@ -98,7 +98,7 @@ test('vulnetix merges /exploits into a matching /gcve CVE and adds exploits-only
   assert.strictEqual(exploitsOnly.author, 'CISA');
 });
 
-test('nvd_cve paginates a wider window and passes an apiKey header when present', async () => {
+test('nvd_cve paginates the publication pass and passes an apiKey header when present', async () => {
   const page0 = JSON.stringify({
     totalResults: 2500,
     vulnerabilities: [{ cve: { id: 'CVE-2026-0001', descriptions: [{ lang: 'en', value: 'First page.' }], published: '2026-06-01T00:00:00.000' } }],
@@ -107,43 +107,97 @@ test('nvd_cve paginates a wider window and passes an apiKey header when present'
     totalResults: 2500,
     vulnerabilities: [{ cve: { id: 'CVE-2026-0002', descriptions: [{ lang: 'en', value: 'Second page.' }], published: '2026-06-02T00:00:00.000' } }],
   });
-  const seenUrls = [];
+  const empty = JSON.stringify({ totalResults: 0, vulnerabilities: [] });
+  const pubUrls = [];
   const seenHeaders = [];
   const source = { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0', api_key: 'nvd-key' };
   const ctx = {
     now: () => new Date('2026-07-30T00:00:00Z'),
     sleep: async () => {},
     request: async (url, opts) => {
-      seenUrls.push(url);
       seenHeaders.push(opts.headers);
-      return { status: 200, headers: {}, body: seenUrls.length === 1 ? page0 : page1 };
+      if (!url.includes('pubStartDate')) return { status: 200, headers: {}, body: empty };
+      pubUrls.push(url);
+      return { status: 200, headers: {}, body: pubUrls.length === 1 ? page0 : page1 };
     },
   };
   const items = await bespoke.nvd_cve.fetch(source, ctx);
-  assert.strictEqual(seenUrls.length, 2);
-  assert.match(seenUrls[0], /lastModStartDate=2026-04-01T00:00:00\.000&lastModEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
-  assert.match(seenUrls[1], /startIndex=2000/);
+  assert.strictEqual(pubUrls.length, 2, 'pass 1 paginates past startIndex 0');
+  // 21-day publication window ending at now — not the old 120-day lastMod window.
+  assert.match(pubUrls[0], /pubStartDate=2026-07-09T00:00:00\.000&pubEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
+  assert.match(pubUrls[1], /startIndex=2000/);
   assert.strictEqual(seenHeaders[0].apiKey, 'nvd-key');
   assert.strictEqual(items.length, 2);
   assert.strictEqual(items[0].external_id, 'CVE-2026-0001');
   assert.strictEqual(items[1].external_id, 'CVE-2026-0002');
 });
 
-test('msrc composes title/summary from ID/Alias/Severity/dates, not the missing description field', async () => {
-  const body = JSON.stringify({
-    value: [
-      { ID: '2011-Aug', Alias: '2011-Aug', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2011-08-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T14:28:28Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2011-Aug' },
-      { ID: '2000-Jan', Alias: '2000-Jan', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2000-01-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T01:04:13Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2000-Jan' },
-    ],
-  });
-  const source = { url: 'x' };
-  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
-  const items = await bespoke.msrc.fetch(source, ctx);
+// The /updates endpoint is a document index of monthly rollups with no description and a
+// null Severity. Per-CVE data lives behind each stub's CvrfUrl.
+const MSRC_INDEX = {
+  value: [
+    { ID: '1999-Sep', DocumentTitle: 'Mariner Release Notes', InitialReleaseDate: '1999-09-02T00:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/1999-Sep' },
+    { ID: '2026-Apr', DocumentTitle: 'April 2026 Security Updates', InitialReleaseDate: '2026-04-14T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-Apr' },
+    { ID: '2026-May', DocumentTitle: 'May 2026 Security Updates', InitialReleaseDate: '2026-05-12T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-May' },
+    { ID: '2026-Jun', DocumentTitle: 'June 2026 Security Updates', InitialReleaseDate: '2026-06-09T07:00:00Z', CvrfUrl: 'https://msrc.test/cvrf/2026-Jun' },
+  ],
+};
+
+function cvrfDoc(id, cve) {
+  return {
+    DocumentTitle: { Value: `${id} Security Updates` },
+    Vulnerability: [{
+      CVE: cve,
+      Title: { Value: 'Windows DNS Client Elevation of Privilege Vulnerability' },
+      CVSSScoreSets: [{ BaseScore: 7.0, Vector: 'CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H' }],
+      Notes: [{ Type: 2, Title: 'Description', Value: '<p>Heap-based buffer overflow.</p>' }],
+      RevisionHistory: [{ Number: '1.0', Date: '2026-06-09T07:00:00' }],
+    }],
+  };
+}
+
+function msrcCtx({ fail = [] } = {}) {
+  const fetched = [];
+  return {
+    fetched,
+    request: async (url) => {
+      if (url.endsWith('/updates')) return { status: 200, headers: {}, body: JSON.stringify(MSRC_INDEX) };
+      const id = url.split('/').pop();
+      fetched.push(id);
+      if (fail.includes(id)) throw new Error('boom');
+      return { status: 200, headers: {}, body: JSON.stringify(cvrfDoc(id, `CVE-2026-${id}`)) };
+    },
+  };
+}
+
+test('msrc follows CvrfUrl for the three most recent documents only', async () => {
+  const ctx = msrcCtx();
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, ctx);
+  assert.deepStrictEqual(ctx.fetched.sort(), ['2026-Apr', '2026-Jun', '2026-May']);
+  assert.strictEqual(items.length, 3);
+  assert.ok(items.every((i) => i.external_id.startsWith('CVE-2026-')));
+});
+
+test('msrc emits per-CVE items with score, severity and description', async () => {
+  const [item] = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, msrcCtx());
+  assert.strictEqual(item.category, 'cve');
+  assert.strictEqual(item.native.cvssScore, 7.0);
+  assert.strictEqual(item.native.cvssVersion, '3.1');
+  assert.strictEqual(item.native.severity, 'high');
+  assert.match(item.summary, /Heap-based buffer overflow/);
+  assert.ok(!/<p>/.test(item.summary), 'HTML must be stripped by cleanSummary');
+});
+
+// Absence over fabrication: a failed document contributes nothing, and never a stub.
+test('msrc skips a document whose CvrfUrl fetch fails', async () => {
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates' }, msrcCtx({ fail: ['2026-Jun'] }));
   assert.strictEqual(items.length, 2);
-  assert.notStrictEqual(items[0].title, items[1].title);
-  assert.match(items[0].title, /Mariner Release Notes \(2011-Aug\)/);
-  assert.match(items[0].summary, /released 2011-08-02/);
-  assert.match(items[0].summary, /updated 2026-02-18/);
+  assert.ok(!items.some((i) => i.external_id.includes('Jun')));
+});
+
+test('msrc caps total emitted items at requestBody', async () => {
+  const items = await bespoke.msrc.fetch({ url: 'https://msrc.test/updates', requestBody: '2' }, msrcCtx());
+  assert.strictEqual(items.length, 2);
 });
 
 test('ghsa maps summary and cvss from a real advisory shape, without faking a vendor from the package id', async () => {
@@ -178,4 +232,86 @@ test('dshield builds one item per attacking IP with rank/reports/targets, no per
   assert.strictEqual(items[0].published_at, '2026-07-30T00:00:00.000Z');
   assert.deepStrictEqual(items[0].native.iocs, [{ type: 'ip', value: '13.94.254.200' }]);
   assert.strictEqual(items[0].category, 'ioc');
+});
+
+function nvdCtx(byUrl) {
+  const calls = [];
+  return {
+    calls,
+    now: () => new Date('2026-08-02T00:00:00Z'),
+    sleep: async () => {},
+    request: async (url) => {
+      calls.push(url);
+      const key = url.includes('pubStartDate') ? 'pub' : 'mod';
+      return { status: 200, headers: {}, body: JSON.stringify(byUrl[key] || { vulnerabilities: [], totalResults: 0 }) };
+    },
+  };
+}
+
+function nvdRecord(id, published, extra = {}) {
+  return { cve: { id, published, descriptions: [{ lang: 'en', value: `${id} description` }], ...extra } };
+}
+
+test('nvd_cve runs a pubStartDate pass and a lastMod pass', async () => {
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [nvdRecord('CVE-2026-1', '2026-07-20T00:00:00')], totalResults: 1 },
+    mod: { vulnerabilities: [nvdRecord('CVE-2025-9', '2025-04-01T00:00:00')], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.ok(ctx.calls.some((u) => u.includes('pubStartDate')));
+  assert.ok(ctx.calls.some((u) => u.includes('lastModStartDate')));
+  assert.deepStrictEqual(items.map((i) => i.external_id).sort(), ['CVE-2025-9', 'CVE-2026-1']);
+});
+
+// The whole point of the change: the lastMod pass must not re-import the backlog.
+test('nvd_cve discards lastMod records published beyond the age cap', async () => {
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [], totalResults: 0 },
+    mod: { vulnerabilities: [nvdRecord('CVE-2002-1', '2002-03-01T00:00:00')], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.deepStrictEqual(items, []);
+});
+
+test('nvd_cve de-duplicates a CVE returned by both passes', async () => {
+  const rec = nvdRecord('CVE-2026-1', '2026-07-20T00:00:00');
+  const ctx = nvdCtx({
+    pub: { vulnerabilities: [rec], totalResults: 1 },
+    mod: { vulnerabilities: [rec], totalResults: 1 },
+  });
+  const items = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.strictEqual(items.length, 1);
+});
+
+test('nvd_cve extracts v2 metrics and CPEs', async () => {
+  const rec = nvdRecord('CVE-2026-2', '2026-07-20T00:00:00', {
+    metrics: { cvssMetricV2: [{ cvssData: { baseScore: 5.0 }, baseSeverity: 'MEDIUM' }] },
+    configurations: [{ nodes: [{ cpeMatch: [{ criteria: 'cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*' }] }] }],
+  });
+  const ctx = nvdCtx({ pub: { vulnerabilities: [rec], totalResults: 1 }, mod: { vulnerabilities: [], totalResults: 0 } });
+  const [item] = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.strictEqual(item.native.cvssScore, 5.0);
+  assert.strictEqual(item.native.cvssVersion, '2.0');
+  assert.strictEqual(item.native.severity, 'medium');
+  assert.deepStrictEqual(item.native.cpes, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
+});
+
+// A page cap that drops records silently is the same defect class as the old lastMod window.
+test('nvd_cve warns when a pass truncates at the page cap', async () => {
+  const page = JSON.stringify({
+    totalResults: 999999,
+    vulnerabilities: [{ cve: { id: 'CVE-2026-9', published: '2026-07-20T00:00:00', descriptions: [] } }],
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  try {
+    await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, {
+      now: () => new Date('2026-08-02T00:00:00Z'),
+      sleep: async () => {},
+      request: async () => ({ status: 200, headers: {}, body: page }),
+    });
+  } finally { console.warn = originalWarn; }
+  assert.ok(warnings.some((w) => /truncated at .* of 999999 records/.test(w)),
+    `expected a truncation warning, got: ${JSON.stringify(warnings)}`);
 });

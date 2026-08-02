@@ -49,6 +49,7 @@ async function applySchema(s = store) {
       raw_json TEXT,
       severity TEXT,
       cvss_score DOUBLE PRECISION,
+      cvss_version TEXT,
       epss_score DOUBLE PRECISION,
       exploitation_status TEXT,
       vendor TEXT,
@@ -71,6 +72,16 @@ async function applySchema(s = store) {
     CREATE TABLE IF NOT EXISTS item_malware_families (item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE, family TEXT NOT NULL, UNIQUE(item_id, family));
     CREATE TABLE IF NOT EXISTS item_domains (item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE, domain TEXT NOT NULL, UNIQUE(item_id, domain));
     CREATE INDEX IF NOT EXISTS idx_item_domains_domain ON item_domains(domain);
+
+    CREATE TABLE IF NOT EXISTS item_cpes (
+      item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      part    TEXT NOT NULL,
+      vendor  TEXT NOT NULL,
+      product TEXT NOT NULL,
+      UNIQUE(item_id, part, vendor, product)
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_cpes_vendor  ON item_cpes(vendor);
+    CREATE INDEX IF NOT EXISTS idx_item_cpes_product ON item_cpes(product);
 
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
@@ -141,6 +152,7 @@ async function applySchema(s = store) {
 
     -- CREATE TABLE IF NOT EXISTS never alters an existing table, so the column needs this too.
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
   `);
 }
 

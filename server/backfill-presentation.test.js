@@ -51,3 +51,63 @@ test('backfill is idempotent — a second run changes nothing', async () => {
     await cleanup();
   }
 });
+
+// Task 6's template only reaches rows the adapter rewrites. writeItem's ON CONFLICT upsert
+// never revisits a row whose feed stopped returning it (OpenPhish rotates URLs), so 1,400
+// rows kept a null summary until this backfill existed.
+test('backfill templates a summary for bulk-IOC rows that have none', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get("INSERT INTO sources (name, fetch_kind) VALUES ('OpenPhish','text_feed') RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, summary, link, published_at)
+       VALUES ($1,'phishing','https://evil.test/login', NULL, 'https://evil.test/login', NULL)`, [s.id]);
+
+    await backfill(store, { dryRun: false });
+    const row = await store.get('SELECT summary FROM items');
+    assert.strictEqual(row.summary, 'Phishing page on evil.test, reported by OpenPhish.');
+  } finally { await cleanup(); }
+});
+
+test('backfill includes the first-seen date when the row has one', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get("INSERT INTO sources (name, fetch_kind) VALUES ('abuse.ch URLhaus','abuse_ch') RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, summary, link, published_at)
+       VALUES ($1,'malware','https://bad.test/x.exe', NULL, 'https://bad.test/x.exe', '2026-07-30T10:00:00Z')`, [s.id]);
+
+    await backfill(store, { dryRun: false });
+    const row = await store.get('SELECT summary FROM items');
+    assert.strictEqual(row.summary, 'Malware payload on bad.test, first seen 2026-07-30, reported by abuse.ch URLhaus.');
+  } finally { await cleanup(); }
+});
+
+// A real upstream summary is never replaced by a template.
+test('backfill leaves an existing bulk-IOC summary alone', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get("INSERT INTO sources (name, fetch_kind) VALUES ('OpenPhish','text_feed') RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, summary, link)
+       VALUES ($1,'phishing','https://evil.test/login', 'A genuine upstream description of this page.', 'https://evil.test/login')`, [s.id]);
+
+    await backfill(store, { dryRun: false });
+    const row = await store.get('SELECT summary FROM items');
+    assert.strictEqual(row.summary, 'A genuine upstream description of this page.');
+  } finally { await cleanup(); }
+});
+
+test('backfill does not template non-IOC categories', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get("INSERT INTO sources (name, fetch_kind) VALUES ('News','rss') RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, summary, link)
+       VALUES ($1,'news','A headline', NULL, 'https://news.test/a')`, [s.id]);
+
+    await backfill(store, { dryRun: false });
+    const row = await store.get('SELECT summary FROM items');
+    assert.strictEqual(row.summary, null);
+  } finally { await cleanup(); }
+});

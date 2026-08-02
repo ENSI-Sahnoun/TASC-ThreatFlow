@@ -8,9 +8,22 @@ const { detectFields } = require('./field_detect');
 // Sources emit dates in mixed formats (ISO 8601, RFC-822 `Wed, 20 Jun 2018 ...`,
 // `2024-01-01 12:00:00 UTC`). Canonicalize to ISO 8601 so the timestamptz column parses
 // them and recency ordering is chronological rather than lexical.
+// JS Date only recognises the RFC-822 US zone abbreviations (GMT/UT/EST/EDT/CST/CDT/MST/
+// MDT/PST/PDT). CERT-EU emits "Wed, 08 Apr 2026 18:00:00 CEST", which parses as Invalid Date
+// and silently costs the row its publication date. Rewrite the known European abbreviations
+// to their numeric offset rather than dropping the date.
+// BST is ambiguous (British Summer Time +0100 vs Bangladesh Standard Time +0600); +0100 is
+// the correct reading for the European/UK feeds in sources.config.js, which are the only
+// ones emitting it here.
+const TZ_ABBREV_OFFSETS = { CET: '+0100', CEST: '+0200', WET: '+0000', WEST: '+0100', EET: '+0200', EEST: '+0300', BST: '+0100' };
+const TRAILING_TZ_RE = /\s([A-Z]{2,4})$/;
+
 function normalizeDate(v) {
   if (v == null || v === '') return null;
-  const d = new Date(v);
+  let s = String(v).trim();
+  const m = s.match(TRAILING_TZ_RE);
+  if (m && TZ_ABBREV_OFFSETS[m[1]]) s = s.replace(TRAILING_TZ_RE, ` ${TZ_ABBREV_OFFSETS[m[1]]}`);
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
 }
@@ -43,12 +56,12 @@ async function recordSync(store, sourceId, startedAt, { status, itemsNew = 0, it
 async function writeItem(t, sourceId, item, enr) {
   const externalId = item.external_id != null ? String(item.external_id) : null;
   const inserted = await t.get(
-    `INSERT INTO items (source_id, category, title, summary, author, link, published_at, external_id, raw_json, severity, cvss_score, epss_score, exploitation_status, vendor, region, industry, threat_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    `INSERT INTO items (source_id, category, title, summary, author, link, published_at, external_id, raw_json, severity, cvss_score, epss_score, exploitation_status, vendor, region, industry, threat_type, cvss_version)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
      ON CONFLICT (source_id, external_id) DO UPDATE SET
        category=excluded.category, title=excluded.title, summary=excluded.summary, author=excluded.author, link=excluded.link,
        published_at=excluded.published_at, fetched_at=now(), raw_json=excluded.raw_json,
-       severity=excluded.severity, cvss_score=excluded.cvss_score, epss_score=excluded.epss_score,
+       severity=excluded.severity, cvss_score=excluded.cvss_score, cvss_version=excluded.cvss_version, epss_score=excluded.epss_score,
        exploitation_status=excluded.exploitation_status,
        vendor=excluded.vendor, region=excluded.region, industry=excluded.industry, threat_type=excluded.threat_type
      RETURNING id, (xmax = 0) AS inserted`,
@@ -70,13 +83,14 @@ async function writeItem(t, sourceId, item, enr) {
       enr.region,
       enr.industry,
       enr.threatType,
+      enr.cvssVersion,
     ]
   );
   const itemId = inserted.id;
   const isNew = inserted.inserted === true;
 
   // Enrichment child rows are idempotent: clear then re-insert for this item.
-  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains']) {
+  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains', 'item_cpes']) {
     await t.run(`DELETE FROM ${tbl} WHERE item_id = $1`, [itemId]);
   }
   for (const c of enr.cves) await t.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, c]);
@@ -84,6 +98,10 @@ async function writeItem(t, sourceId, item, enr) {
   for (const a of enr.actors) await t.run('INSERT INTO item_actors (item_id, actor) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, a]);
   for (const f of enr.families) await t.run('INSERT INTO item_malware_families (item_id, family) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, f]);
   for (const d of enr.domains) await t.run('INSERT INTO item_domains (item_id, domain) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, d]);
+  for (const c of enr.cpes || []) {
+    await t.run('INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+      [itemId, c.part, c.vendor, c.product]);
+  }
   return { itemId, isNew };
 }
 
@@ -167,4 +185,4 @@ async function syncSource(source, opts = {}) {
   }
 }
 
-module.exports = { syncSource, loadKevCveSet, normalizeDate };
+module.exports = { syncSource, writeItem, loadKevCveSet, normalizeDate };

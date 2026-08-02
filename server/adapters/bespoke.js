@@ -1,5 +1,7 @@
 const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
+const { metricFromNvd, scoreFromVector, severityFromScore } = require('../cvss');
+const { cpesFromRaw } = require('../cpe');
 
 const kev = {
   async fetch(source, ctx) {
@@ -106,66 +108,155 @@ const dshield = {
   },
 };
 
+// MSRC's /cvrf/v3.0/updates list is a document index, not per-CVE detail — its rows are
+// monthly rollup stubs ("March 2017 Security Updates", Severity: null, dated 2017) with no
+// description field at all. Real per-CVE data lives behind each stub's CvrfUrl.
+//
+// A single CVRF document holds ~991 vulnerabilities, so this is capped twice: to the three
+// most recent documents, and to MSRC_MAX_ITEMS emitted items. The /updates index is returned
+// oldest-first (1999-Sep is element 0), so "most recent" is the tail.
+const MSRC_DOC_COUNT = 3;
+const MSRC_MAX_ITEMS = 400;
+
 const msrc = {
-  // MSRC's /cvrf/v3.0/updates list is a document index, not per-CVE detail — it has no
-  // description field at all. mapping.summary used to point at DocumentTitle, so every
-  // doc's summary was just its own title repeated; several titles (e.g. "Mariner Release
-  // Notes") repeat across dozens of distinct monthly docs, making them indistinguishable.
-  // ID/Alias/Severity/dates are present and unused — compose those instead.
   async fetch(source, ctx) {
     const res = await ctx.request(source.url, { timeoutMs: 20000, headers: { Accept: 'application/json' } });
     if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-    const records = JSON.parse(res.body).value || [];
-    return records.filter((r) => r.DocumentTitle).map((r) => normalizedItem({
-      external_id: r.ID || r.Alias,
-      title: r.Alias && r.Alias !== r.DocumentTitle ? `${r.DocumentTitle} (${r.Alias})` : r.DocumentTitle,
-      summary: [
-        r.Severity && `Severity: ${r.Severity}`,
-        r.InitialReleaseDate && `released ${r.InitialReleaseDate.slice(0, 10)}`,
-        r.CurrentReleaseDate && r.CurrentReleaseDate !== r.InitialReleaseDate && `updated ${r.CurrentReleaseDate.slice(0, 10)}`,
-      ].filter(Boolean).join(' — ') || null,
-      author: 'Microsoft MSRC',
-      link: r.CvrfUrl || null,
-      published_at: r.InitialReleaseDate || null,
-      category: 'vulnerability',
-      raw: r,
-      native: { severity: r.Severity ? String(r.Severity).toLowerCase() : null },
-    }));
+    const index = JSON.parse(res.body).value || [];
+    const recent = index
+      .filter((r) => r.CvrfUrl)
+      .sort((a, b) => new Date(a.InitialReleaseDate || 0) - new Date(b.InitialReleaseDate || 0))
+      .slice(-MSRC_DOC_COUNT);
+
+    const maxItems = Number(source.requestBody) || MSRC_MAX_ITEMS;
+    const items = [];
+    for (const doc of recent) {
+      if (items.length >= maxItems) break;
+      let vulns;
+      try {
+        const docRes = await ctx.request(doc.CvrfUrl, { timeoutMs: 30000, headers: { Accept: 'application/json' } });
+        if (docRes.status < 200 || docRes.status >= 300) continue;
+        vulns = JSON.parse(docRes.body).Vulnerability || [];
+      } catch {
+        // A document that cannot be fetched or parsed contributes nothing. No stub fallback —
+        // the content-free stubs are exactly what this change removes.
+        continue;
+      }
+      for (const v of vulns) {
+        if (items.length >= maxItems) break;
+        if (!v.CVE) continue;
+        // CVSSScoreSets repeats the same score once per affected ProductID; the first entry
+        // carries the base score for the vulnerability itself.
+        const scoreSet = (v.CVSSScoreSets || [])[0] || null;
+        const vector = scoreSet ? scoreSet.Vector : null;
+        const score = scoreSet && typeof scoreSet.BaseScore === 'number'
+          ? scoreSet.BaseScore
+          : scoreFromVector(vector);
+        // Notes Type 2 is the CVE description; Type 4 is FAQ boilerplate.
+        const description = (v.Notes || []).find((n) => n.Type === 2);
+        const revision = (v.RevisionHistory || [])[0];
+        const version = vector && /^CVSS:(\d\.\d)/.test(vector) ? vector.match(/^CVSS:(\d\.\d)/)[1] : null;
+        items.push(normalizedItem({
+          external_id: v.CVE,
+          title: v.Title && v.Title.Value ? `${v.CVE} — ${v.Title.Value}` : v.CVE,
+          summary: description ? description.Value : null,
+          author: 'Microsoft MSRC',
+          link: `https://msrc.microsoft.com/update-guide/vulnerability/${v.CVE}`,
+          published_at: (revision && revision.Date) || doc.InitialReleaseDate || null,
+          category: 'cve',
+          raw: v,
+          native: {
+            cveIds: [v.CVE],
+            vendor: 'Microsoft',
+            cvssScore: score != null ? score : null,
+            cvssVersion: version,
+            severity: score != null ? severityFromScore(score, version) : null,
+          },
+        }));
+      }
+    }
+    return items;
   },
 };
 
-const NVD_WINDOW_DAYS = 120;
+// Pass 1 covers newly published CVEs. Measured 2026-08-02 against the live API: NVD publishes
+// ~365 CVEs/day (~133k/year), so 7d=2,093 · 14d=5,257 · 21d=7,642 · 45d=13,326. 21 days fits
+// inside NVD_MAX_PAGES * NVD_RESULTS_PER_PAGE with headroom; 45 would exceed a 5-page cap and
+// truncate. Re-measure before widening this.
+const NVD_PUB_WINDOW_DAYS = 21;
+// Pass 2 catches meaningful re-scores (a 2025 CVE raised to critical this week) without
+// re-importing NVD's 1990s-2000s backlog, which is what a bare lastMod query returns:
+// before this change, 2002 contributed 2,156 stored rows and 2017 contributed 19.
+//
+// Kept short deliberately. lastMod returns everything NVD re-touched — including the backlog
+// it is bulk-re-analyzing — and the age filter below discards most of it client-side, so each
+// extra day here is mostly wasted bandwidth. Measured at 14 days: 8 pages, ~70MB, most of it
+// thrown away.
+const NVD_MOD_WINDOW_DAYS = 7;
+const NVD_MOD_MAX_AGE_YEARS = 2;
 const NVD_RESULTS_PER_PAGE = 2000;
-const NVD_MAX_PAGES = 5;
+// 8 pages = 16,000 records, roughly double the 21-day volume, so ordinary growth in NVD's
+// publication rate cannot silently drop records.
+const NVD_MAX_PAGES = 8;
+// Pages are 4-18MB. Measured against the live API on 2026-08-02, individual pages took up to
+// 38.8s, so 20s (the previous default) timed out mid-sync and 45s left no headroom.
+const NVD_TIMEOUT_MS = 90000;
 
 const nvdCve = {
   async fetch(source, ctx) {
     const fmt = (d) => d.toISOString().replace('Z', '');
     const now = ctx.now ? ctx.now() : new Date();
-    const windowStart = new Date(now - NVD_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     const headers = source.api_key ? { apiKey: source.api_key } : {};
     const sleep = ctx.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     // NVD rate limit is 5 req/30s unauthenticated, 50 req/30s with an apiKey.
     const delayMs = source.api_key ? 700 : 6500;
+    const daysAgo = (n) => new Date(now - n * 24 * 60 * 60 * 1000);
 
-    const vulns = [];
-    let startIndex = 0;
-    for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
-      const url = `${source.url}?lastModStartDate=${fmt(windowStart)}&lastModEndDate=${fmt(now)}&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
-      const res = await ctx.request(url, { timeoutMs: 20000, headers });
-      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-      const body = JSON.parse(res.body);
-      vulns.push(...(body.vulnerabilities || []));
-      const totalResults = body.totalResults || 0;
-      startIndex += NVD_RESULTS_PER_PAGE;
-      if (startIndex >= totalResults) break;
-      await sleep(delayMs);
+    async function collect(startParam, endParam, since) {
+      const out = [];
+      let startIndex = 0;
+      let total = 0;
+      for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
+        const url = `${source.url}?${startParam}=${fmt(since)}&${endParam}=${fmt(now)}`
+          + `&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
+        const res = await ctx.request(url, { timeoutMs: NVD_TIMEOUT_MS, headers });
+        if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+        const body = JSON.parse(res.body);
+        out.push(...(body.vulnerabilities || []));
+        total = body.totalResults || 0;
+        startIndex += NVD_RESULTS_PER_PAGE;
+        if (startIndex >= total) break;
+        await sleep(delayMs);
+      }
+      // A page cap that drops records silently is the same class of defect as the old
+      // lastMod window: the corpus quietly stops matching what the source actually holds.
+      if (total > out.length) {
+        console.warn(`[nvd] ${startParam} pass truncated at ${out.length} of ${total} records `
+          + `(NVD_MAX_PAGES=${NVD_MAX_PAGES}); narrow the window or raise the cap`);
+      }
+      return out;
     }
 
-    return vulns.filter((v) => v.cve && v.cve.id).map((v) => {
+    const published = await collect('pubStartDate', 'pubEndDate', daysAgo(NVD_PUB_WINDOW_DAYS));
+    await sleep(delayMs);
+    const modified = await collect('lastModStartDate', 'lastModEndDate', daysAgo(NVD_MOD_WINDOW_DAYS));
+
+    const maxAge = new Date(now);
+    maxAge.setFullYear(maxAge.getFullYear() - NVD_MOD_MAX_AGE_YEARS);
+    const fresh = modified.filter((v) => {
+      const p = v.cve && v.cve.published;
+      return p && new Date(p) >= maxAge;
+    });
+
+    const byId = new Map();
+    for (const v of [...published, ...fresh]) {
+      if (v.cve && v.cve.id && !byId.has(v.cve.id)) byId.set(v.cve.id, v);
+    }
+
+    return [...byId.values()].map((v) => {
       const cve = v.cve;
       const desc = (cve.descriptions || []).find((d) => d.lang === 'en');
-      const metric = cve.metrics?.cvssMetricV31?.[0]?.cvssData || cve.metrics?.cvssMetricV30?.[0]?.cvssData || null;
+      const metric = metricFromNvd(cve.metrics);
       return normalizedItem({
         external_id: cve.id,
         title: cve.id,
@@ -175,7 +266,13 @@ const nvdCve = {
         published_at: cve.published || null,
         category: 'cve',
         raw: cve,
-        native: { cveIds: [cve.id], cvssScore: metric ? metric.baseScore : null, severity: metric ? String(metric.baseSeverity || '').toLowerCase() || null : null },
+        native: {
+          cveIds: [cve.id],
+          cvssScore: metric ? metric.score : null,
+          cvssVersion: metric ? metric.version : null,
+          severity: metric ? metric.severity : null,
+          cpes: cpesFromRaw(cve),
+        },
       });
     });
   },

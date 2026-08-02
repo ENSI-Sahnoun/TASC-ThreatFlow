@@ -42,12 +42,14 @@ function normalizedItem(fields = {}) {
     native: {
       cveIds: native.cveIds || [],
       iocs,
+      cpes: native.cpes || [],
       malwareFamilies: native.malwareFamilies || [],
       actors: native.actors || [],
       vendor: native.vendor || null,
       region: native.region || null,
       industry: native.industry || null,
       cvssScore: native.cvssScore != null ? native.cvssScore : null,
+      cvssVersion: native.cvssVersion || null,
       epssScore: native.epssScore != null ? Number(native.epssScore) : null,
       // Not stored on items, only consumed by enrichItem() to derive cvssScore when the
       // feed gave no number (see server/adapters/osv.js). Must stay on the whitelist below

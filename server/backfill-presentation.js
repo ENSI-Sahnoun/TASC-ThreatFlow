@@ -1,13 +1,24 @@
 // Re-derives presentation fields over rows written before present.js existed. Idempotent —
 // running it twice changes nothing the second time. Never destroys data: raw_json still holds
 // the untouched upstream record, so every value here can be recomputed at any point.
-const { displayTitle, cleanSummary, normalizeLink, extractTitleUrl } = require('./present');
+const { displayTitle, cleanSummary, normalizeLink, extractTitleUrl, bulkIocSummary } = require('./present');
 
 function backfillItem(row) {
   const titleUrl = extractTitleUrl(row.title);
   const title = displayTitle(row.title, { category: row.category }) || '(untitled)';
-  const summary = cleanSummary(row.summary);
   const link = normalizeLink(row.link) || titleUrl || null;
+  // Bulk indicator feeds (OpenPhish, URLhaus) ship one URL per record with no prose. The
+  // adapters template a summary at write time, but writeItem's ON CONFLICT upsert only ever
+  // reaches rows a feed is still returning — OpenPhish rotates its URLs, so rows written
+  // before the template existed would keep a null summary forever without this.
+  // A genuine upstream summary always wins.
+  const summary = cleanSummary(row.summary)
+    || bulkIocSummary({
+      category: row.category,
+      value: link,
+      sourceName: row.source_name,
+      firstSeen: row.published_at,
+    });
   if (title === row.title && summary === row.summary && link === row.link) return null;
   return { title, summary, link };
 }
@@ -20,7 +31,10 @@ async function backfill(store, { dryRun = true, batchSize = 500 } = {}) {
 
   for (;;) {
     const rows = await store.all(
-      'SELECT id, category, title, summary, link FROM items ORDER BY id LIMIT $1 OFFSET $2',
+      `SELECT items.id, items.category, items.title, items.summary, items.link, items.published_at,
+              sources.name AS source_name
+         FROM items JOIN sources ON sources.id = items.source_id
+        ORDER BY items.id LIMIT $1 OFFSET $2`,
       [batchSize, offset]);
     if (!rows.length) break;
 

@@ -1,5 +1,6 @@
 const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
+const { bulkIocSummary } = require('../present');
 const { humanizeToken } = require('../present');
 
 // URLhaus tags come as an array, ThreatFox's as a comma-joined string — normalize both
@@ -78,7 +79,13 @@ async function fetch(source, ctx) {
         .filter(Boolean).join(' — ') || null;
     } else {
       title = `${families[0] || 'IOC'}: ${iocValue || '(unknown)'}`;
-      summary = iocSummary(rec);
+      // iocSummary keeps precedence — a real upstream summary is never replaced by a template.
+      summary = iocSummary(rec) || bulkIocSummary({
+        category: bucket,
+        value: iocValue,
+        sourceName: source.name,
+        firstSeen: rec.first_seen || rec.dateadded || rec.first_seen_utc || null,
+      });
     }
 
     out.push(normalizedItem({

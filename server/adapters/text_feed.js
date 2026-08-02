@@ -1,5 +1,6 @@
 const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
+const { bulkIocSummary } = require('../present');
 
 async function fetch(source, ctx) {
   const res = await ctx.request(source.url, { timeoutMs: 20000 });
@@ -10,7 +11,9 @@ async function fetch(source, ctx) {
   return lines.slice(0, 200).map((line) => normalizedItem({
     external_id: line,
     title: line,
-    summary: null,
+    // A text feed is a bare URL list with no date, so firstSeen is genuinely null — the
+    // template omits the date clause rather than inventing one.
+    summary: bulkIocSummary({ category: bucket, value: line, sourceName: source.name, firstSeen: null }),
     link: /^https?:\/\//.test(line) ? line : null,
     category: bucket,
     raw: { line },
