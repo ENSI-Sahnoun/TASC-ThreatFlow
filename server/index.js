@@ -353,9 +353,15 @@ function createApp(store) {
     // With a profile active, relevance drives the order. An item with no row yet (inserted
     // between recomputes) is treated as not_yours: it sorts last but is never dropped, and the
     // caller never has to handle a null tier.
+    // Model-assigned signal quality. Demotion only: a non-intel verdict costs an item its
+    // place in the ordering and nothing else — it stays in the results, stays searchable, and
+    // stays one click away. A misclassification must never make something disappear.
+    const qualityJoin = 'LEFT JOIN item_quality iq ON iq.item_id = items.id';
+    const demotionRank = "CASE WHEN iq.verdict IN ('roundup','commentary','promotion') THEN 1 ELSE 0 END";
+
     let relJoin = '';
     let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches, NULL::text AS rel_sentence';
-    let orderBy = 'ORDER BY COALESCE(items.published_at, items.fetched_at) DESC';
+    let orderBy = `ORDER BY ${demotionRank}, COALESCE(items.published_at, items.fetched_at) DESC`;
     if (profile) {
       const pid = ph(profile.id);
       const pver = ph(profile.profile_version);
@@ -367,26 +373,30 @@ function createApp(store) {
         + 'irp.sentence AS rel_sentence';
       // Rank, don't hide — opt-in only.
       if (req.query.relevantOnly === '1') where.push("COALESCE(ir.tier, 'not_yours') IN ('act_now','watch')");
+      // Personal relevance is the primary axis; quality only breaks ties beneath it. An
+      // act_now item still leads even if the classifier called it promotional.
       orderBy = `ORDER BY CASE COALESCE(ir.tier, 'not_yours')
                    WHEN 'act_now' THEN 0 WHEN 'watch' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
+                 ${demotionRank},
                  COALESCE(ir.score, 0) DESC,
                  COALESCE(items.published_at, items.fetched_at) DESC`;
     }
 
     const whereSql = where.join(' AND ');
     const total = (await store.get(
-      `SELECT COUNT(*)::int AS c FROM items JOIN sources ON sources.id = items.source_id ${relJoin} WHERE ${whereSql}`,
+      `SELECT COUNT(*)::int AS c FROM items JOIN sources ON sources.id = items.source_id ${relJoin} ${qualityJoin} WHERE ${whereSql}`,
       params)).c;
     const lim = Math.min(Number(limit) || 50, 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
     const rows = await store.all(`
       SELECT items.*, sources.name AS source_name, sources.tier AS source_tier,
              cl.id AS cluster_id, COALESCE(cl.source_count, 1) AS source_count,
-             ${relSelect}
+             ${relSelect}, iq.verdict AS quality_verdict
       FROM items
       JOIN sources ON sources.id = items.source_id
       LEFT JOIN clusters cl ON cl.primary_item_id = items.id
       ${relJoin}
+      ${qualityJoin}
       WHERE ${whereSql}
       ${orderBy}
       LIMIT ${ph(lim)} OFFSET ${ph(offset)}
@@ -399,9 +409,11 @@ function createApp(store) {
       row.relevance = profile
         ? { tier: row.rel_tier, matches: row.rel_matches, sentence: row.rel_sentence ?? null }
         : null;
+      row.quality = row.quality_verdict ? { verdict: row.quality_verdict } : null;
       delete row.rel_tier;
       delete row.rel_matches;
       delete row.rel_sentence;
+      delete row.quality_verdict;
     }
     // Total lives in a header so the body stays a bare array (stable contract); the
     // CORS layer exposes X-Total-Count so a cross-origin Angular grid can read it.

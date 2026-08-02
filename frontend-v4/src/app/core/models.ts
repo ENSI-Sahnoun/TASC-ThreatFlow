@@ -85,6 +85,7 @@ export interface Item {
   // null only when no profile is active; otherwise always populated, with an unscored item
   // reading as not_yours rather than null.
   relevance?: Relevance | null;
+  quality?: Quality | null;
 }
 
 export interface ClusterMember {
@@ -226,4 +227,10 @@ export interface Relevance {
   // Model-written wording, null whenever it has not been generated. The tier never depends on
   // it, so an unreachable Ollama costs nicer phrasing and nothing else.
   sentence?: string | null;
+}
+
+// Model-assigned signal quality. Purely advisory: a non-intel verdict demotes an item in the
+// ordering and marks it, never removes it.
+export interface Quality {
+  verdict: 'intel' | 'roundup' | 'commentary' | 'promotion';
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tierLabel, tierToken, tierIsProminent, matchSentence, explanation, TIER_ORDER } from './relevance';
+import { tierLabel, tierToken, tierIsProminent, matchSentence, explanation, qualityLabel, qualityHint, TIER_ORDER } from './relevance';
 import type { RelevanceMatch } from './models';
 
 const m = (kind: RelevanceMatch['kind'], value: string): RelevanceMatch => ({ kind, value });
@@ -89,5 +89,28 @@ describe('explanation', () => {
 
   it('still explains an absent verdict', () => {
     expect(explanation(null)).toBe('Nothing in this matches your profile.');
+  });
+});
+
+describe('quality badge', () => {
+  it('labels the three demoted kinds in plain words', () => {
+    expect(qualityLabel('roundup')).toBe('digest');
+    expect(qualityLabel('commentary')).toBe('opinion');
+    expect(qualityLabel('promotion')).toBe('vendor');
+  });
+
+  // The common case must add no visual noise.
+  it('renders nothing for intel or an absent verdict', () => {
+    expect(qualityLabel('intel')).toBeNull();
+    expect(qualityLabel(null)).toBeNull();
+    expect(qualityLabel(undefined)).toBeNull();
+    expect(qualityLabel('nonsense')).toBeNull();
+  });
+
+  // The classifier is conservative and sometimes wrong; the tooltip must say so.
+  it('explains that the item is ranked lower, not hidden', () => {
+    expect(qualityHint('promotion')).toContain('not hidden');
+    expect(qualityHint('roundup')).toContain('local model');
+    expect(qualityHint('intel')).toBe('');
   });
 });

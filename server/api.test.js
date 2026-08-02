@@ -474,3 +474,74 @@ test('POST /api/profiles/:id/relevance/prose returns 202 and 404 for unknown ids
     assert.strictEqual((await send(app, 'POST', '/api/profiles/999/relevance/prose')).status, 404);
   } finally { await cleanup(); }
 });
+
+test('GET /api/items exposes the quality verdict when one exists', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run("INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,'promotion','test-model')", [hitId]);
+    const res = await get(app, '/api/items');
+    const hit = res.body.find((r) => r.id === hitId);
+    assert.strictEqual(hit.quality.verdict, 'promotion');
+  } finally { await cleanup(); }
+});
+
+test('quality is null for an unclassified item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const res = await get(app, '/api/items');
+    assert.ok(res.body.every((r) => r.quality === null));
+  } finally { await cleanup(); }
+});
+
+// Demoted, never removed — a misclassification must cost ranking, not visibility.
+test('non-intel items sort below intel but remain in the results', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('Q','rss',true) RETURNING id");
+    // The junk item is NEWER, so recency alone would put it first.
+    const junk = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Vendor Raises $50 Million','J-1', now()) RETURNING id`, [src.id]);
+    const real = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Actor breaches hospital network','R-1', now() - interval '2 days') RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,'promotion','m')", [junk.id]);
+    await store.run("INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,'intel','m')", [real.id]);
+
+    const res = await get(app, '/api/items');
+    const ids = res.body.map((r) => r.id);
+    assert.ok(ids.includes(junk.id), 'the demoted item is still present');
+    assert.ok(ids.indexOf(real.id) < ids.indexOf(junk.id), 'intel outranks newer promotion');
+  } finally { await cleanup(); }
+});
+
+// Personal relevance is the primary axis; quality only breaks ties beneath it.
+test('quality demotion never outranks a relevance tier', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('Q2','rss',true) RETURNING id");
+    const urgent = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+       VALUES ($1,'cve','FortiOS RCE','U-1','high', now() - interval '1 day') RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [urgent.id]);
+    // Flag the urgent item as junk; its act_now tier must still win.
+    await store.run("INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,'promotion','m')", [urgent.id]);
+    const boring = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Unrelated story','B-1', now()) RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,'intel','m')", [boring.id]);
+
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    assert.strictEqual(res.body[0].id, urgent.id, 'act_now leads despite the promotion verdict');
+  } finally { await cleanup(); }
+});
