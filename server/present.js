@@ -55,6 +55,17 @@ function displayTitle(title, opts = {}) {
   return `${label}${prefix} · ${host}`;
 }
 
+// Adapters hand this an ISO string; the backfill hands it a pg Date object. String(date) on a
+// Date gives "Thu Jul 30 2026 …", so slicing without normalizing silently drops the date.
+function isoDay(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
 // Bulk indicator feeds (OpenPhish, URLhaus) emit one URL per record with no prose. A generated
 // model summary would add nothing a template cannot state exactly, so this stays deterministic.
 function bulkIocSummary({ category, value, sourceName, firstSeen } = {}) {
@@ -62,8 +73,8 @@ function bulkIocSummary({ category, value, sourceName, firstSeen } = {}) {
   if (!label) return null;
   const host = hostOf(value);
   if (!host) return null;
-  const date = firstSeen ? String(firstSeen).slice(0, 10) : null;
-  const when = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `, first seen ${date}` : '';
+  const date = isoDay(firstSeen);
+  const when = date ? `, first seen ${date}` : '';
   const who = sourceName ? `, reported by ${sourceName}` : '';
   return `${label} on ${host}${when}${who}.`;
 }

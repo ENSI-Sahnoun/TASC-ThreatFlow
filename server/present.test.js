@@ -93,3 +93,13 @@ test('bulkIocSummary returns null when it has nothing to describe', () => {
   assert.strictEqual(bulkIocSummary({ category: 'phishing', value: 'not-a-url', sourceName: 'OpenPhish' }), null);
   assert.strictEqual(bulkIocSummary({ category: 'news', value: 'http://x.test/', sourceName: 'S' }), null);
 });
+
+// The backfill reads published_at from Postgres as a Date object, not an ISO string.
+test('bulkIocSummary accepts a Date object for firstSeen', () => {
+  assert.strictEqual(
+    bulkIocSummary({ category: 'phishing', value: 'http://evil.test/a', sourceName: 'OpenPhish', firstSeen: new Date('2026-07-30T10:00:00Z') }),
+    'Phishing page on evil.test, first seen 2026-07-30, reported by OpenPhish.');
+  assert.strictEqual(
+    bulkIocSummary({ category: 'phishing', value: 'http://evil.test/a', sourceName: 'OpenPhish', firstSeen: new Date('nope') }),
+    'Phishing page on evil.test, reported by OpenPhish.');
+});

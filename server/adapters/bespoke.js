@@ -179,17 +179,28 @@ const msrc = {
   },
 };
 
-// Pass 1 covers newly published CVEs. NVD publishes roughly 40k CVEs/year, so 45 days is
-// ~5k records — inside NVD_MAX_PAGES * NVD_RESULTS_PER_PAGE. The previous 120-day window
-// would be ~13k and would silently truncate.
-const NVD_PUB_WINDOW_DAYS = 45;
+// Pass 1 covers newly published CVEs. Measured 2026-08-02 against the live API: NVD publishes
+// ~365 CVEs/day (~133k/year), so 7d=2,093 · 14d=5,257 · 21d=7,642 · 45d=13,326. 21 days fits
+// inside NVD_MAX_PAGES * NVD_RESULTS_PER_PAGE with headroom; 45 would exceed a 5-page cap and
+// truncate. Re-measure before widening this.
+const NVD_PUB_WINDOW_DAYS = 21;
 // Pass 2 catches meaningful re-scores (a 2025 CVE raised to critical this week) without
 // re-importing NVD's 1990s-2000s backlog, which is what a bare lastMod query returns:
 // before this change, 2002 contributed 2,156 stored rows and 2017 contributed 19.
-const NVD_MOD_WINDOW_DAYS = 14;
+//
+// Kept short deliberately. lastMod returns everything NVD re-touched — including the backlog
+// it is bulk-re-analyzing — and the age filter below discards most of it client-side, so each
+// extra day here is mostly wasted bandwidth. Measured at 14 days: 8 pages, ~70MB, most of it
+// thrown away.
+const NVD_MOD_WINDOW_DAYS = 7;
 const NVD_MOD_MAX_AGE_YEARS = 2;
 const NVD_RESULTS_PER_PAGE = 2000;
-const NVD_MAX_PAGES = 5;
+// 8 pages = 16,000 records, roughly double the 21-day volume, so ordinary growth in NVD's
+// publication rate cannot silently drop records.
+const NVD_MAX_PAGES = 8;
+// Pages are 4-18MB. Measured against the live API on 2026-08-02, individual pages took up to
+// 38.8s, so 20s (the previous default) timed out mid-sync and 45s left no headroom.
+const NVD_TIMEOUT_MS = 90000;
 
 const nvdCve = {
   async fetch(source, ctx) {
@@ -204,17 +215,24 @@ const nvdCve = {
     async function collect(startParam, endParam, since) {
       const out = [];
       let startIndex = 0;
+      let total = 0;
       for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
         const url = `${source.url}?${startParam}=${fmt(since)}&${endParam}=${fmt(now)}`
           + `&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
-        const res = await ctx.request(url, { timeoutMs: 20000, headers });
+        const res = await ctx.request(url, { timeoutMs: NVD_TIMEOUT_MS, headers });
         if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
         const body = JSON.parse(res.body);
         out.push(...(body.vulnerabilities || []));
-        const totalResults = body.totalResults || 0;
+        total = body.totalResults || 0;
         startIndex += NVD_RESULTS_PER_PAGE;
-        if (startIndex >= totalResults) break;
+        if (startIndex >= total) break;
         await sleep(delayMs);
+      }
+      // A page cap that drops records silently is the same class of defect as the old
+      // lastMod window: the corpus quietly stops matching what the source actually holds.
+      if (total > out.length) {
+        console.warn(`[nvd] ${startParam} pass truncated at ${out.length} of ${total} records `
+          + `(NVD_MAX_PAGES=${NVD_MAX_PAGES}); narrow the window or raise the cap`);
       }
       return out;
     }

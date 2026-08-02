@@ -123,8 +123,8 @@ test('nvd_cve paginates the publication pass and passes an apiKey header when pr
   };
   const items = await bespoke.nvd_cve.fetch(source, ctx);
   assert.strictEqual(pubUrls.length, 2, 'pass 1 paginates past startIndex 0');
-  // 45-day publication window ending at now — not the old 120-day lastMod window.
-  assert.match(pubUrls[0], /pubStartDate=2026-06-15T00:00:00\.000&pubEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
+  // 21-day publication window ending at now — not the old 120-day lastMod window.
+  assert.match(pubUrls[0], /pubStartDate=2026-07-09T00:00:00\.000&pubEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
   assert.match(pubUrls[1], /startIndex=2000/);
   assert.strictEqual(seenHeaders[0].apiKey, 'nvd-key');
   assert.strictEqual(items.length, 2);
@@ -294,4 +294,24 @@ test('nvd_cve extracts v2 metrics and CPEs', async () => {
   assert.strictEqual(item.native.cvssVersion, '2.0');
   assert.strictEqual(item.native.severity, 'medium');
   assert.deepStrictEqual(item.native.cpes, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
+});
+
+// A page cap that drops records silently is the same defect class as the old lastMod window.
+test('nvd_cve warns when a pass truncates at the page cap', async () => {
+  const page = JSON.stringify({
+    totalResults: 999999,
+    vulnerabilities: [{ cve: { id: 'CVE-2026-9', published: '2026-07-20T00:00:00', descriptions: [] } }],
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  try {
+    await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, {
+      now: () => new Date('2026-08-02T00:00:00Z'),
+      sleep: async () => {},
+      request: async () => ({ status: 200, headers: {}, body: page }),
+    });
+  } finally { console.warn = originalWarn; }
+  assert.ok(warnings.some((w) => /truncated at .* of 999999 records/.test(w)),
+    `expected a truncation warning, got: ${JSON.stringify(warnings)}`);
 });
