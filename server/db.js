@@ -116,6 +116,19 @@ async function applySchema(s = store) {
     CREATE INDEX IF NOT EXISTS idx_item_relevance_sort
       ON item_relevance(profile_id, profile_version, tier, score DESC);
 
+    -- Model-written prose lives in its own table, never as a column on item_relevance. The
+    -- separation is the guardrail: there is no tier column here, so a bad model output is
+    -- structurally incapable of changing a verdict. It can only change wording.
+    CREATE TABLE IF NOT EXISTS item_relevance_prose (
+      profile_id      INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      item_id         INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      profile_version INT NOT NULL,
+      sentence        TEXT NOT NULL,
+      model           TEXT NOT NULL,
+      computed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (profile_id, item_id, profile_version)
+    );
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,

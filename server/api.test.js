@@ -428,3 +428,49 @@ test('POST /api/profiles/:id/relevance/recompute returns 202 and 404 for unknown
     assert.strictEqual((await send(app, 'POST', '/api/profiles/999/relevance/recompute')).status, 404);
   } finally { await cleanup(); }
 });
+
+test('GET /api/items includes a model-written sentence when one exists', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    await store.run(
+      `INSERT INTO item_relevance_prose (profile_id, item_id, profile_version, sentence, model)
+       VALUES ($1,$2,1,'You run FortiOS, so this critical flaw is directly exposed.','test-model')`,
+      [p.body.id, hitId]);
+
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    const hit = res.body.find((r) => r.id === hitId);
+    assert.match(hit.relevance.sentence, /directly exposed/);
+  } finally { await cleanup(); }
+});
+
+// Ollama being unreachable must cost nothing but nicer phrasing.
+test('relevance sentence is null when no prose was written, and the tier is unaffected', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', '/api/items', null, { 'X-Profile-Id': String(p.body.id) });
+    const hit = res.body.find((r) => r.id === hitId);
+    assert.strictEqual(hit.relevance.sentence, null);
+    assert.strictEqual(hit.relevance.tier, 'act_now');
+    assert.ok(hit.relevance.matches.length > 0, 'the templated reasons are still there');
+  } finally { await cleanup(); }
+});
+
+test('POST /api/profiles/:id/relevance/prose returns 202 and 404 for unknown ids', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    assert.strictEqual((await send(app, 'POST', '/api/profiles/999/relevance/prose')).status, 404);
+  } finally { await cleanup(); }
+});

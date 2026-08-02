@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tierLabel, tierToken, tierIsProminent, matchSentence, TIER_ORDER } from './relevance';
+import { tierLabel, tierToken, tierIsProminent, matchSentence, explanation, TIER_ORDER } from './relevance';
 import type { RelevanceMatch } from './models';
 
 const m = (kind: RelevanceMatch['kind'], value: string): RelevanceMatch => ({ kind, value });
@@ -69,5 +69,25 @@ describe('matchSentence', () => {
   it('explains an empty match list instead of returning nothing', () => {
     expect(matchSentence([])).toBe('Nothing in this matches your profile.');
     expect(matchSentence(null)).toBe('Nothing in this matches your profile.');
+  });
+});
+
+describe('explanation', () => {
+  const base = { tier: 'act_now' as const, matches: [m('product', 'fortinet fortios')] };
+
+  it('prefers the model sentence when one was written', () => {
+    expect(explanation({ ...base, sentence: 'You run FortiOS, so this is directly exposed.' }))
+      .toBe('You run FortiOS, so this is directly exposed.');
+  });
+
+  // Ollama down, never run, or output rejected by the guard — all land here.
+  it('falls back to the template when there is no model sentence', () => {
+    expect(explanation({ ...base, sentence: null })).toBe('Matches your stack (fortinet fortios).');
+    expect(explanation(base)).toBe('Matches your stack (fortinet fortios).');
+    expect(explanation({ ...base, sentence: '   ' })).toBe('Matches your stack (fortinet fortios).');
+  });
+
+  it('still explains an absent verdict', () => {
+    expect(explanation(null)).toBe('Nothing in this matches your profile.');
   });
 });

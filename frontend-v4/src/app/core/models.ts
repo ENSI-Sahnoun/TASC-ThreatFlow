@@ -223,4 +223,7 @@ export interface RelevanceMatch {
 export interface Relevance {
   tier: 'act_now' | 'watch' | 'low' | 'not_yours';
   matches: RelevanceMatch[];
+  // Model-written wording, null whenever it has not been generated. The tier never depends on
+  // it, so an unreachable Ollama costs nicer phrasing and nothing else.
+  sentence?: string | null;
 }
