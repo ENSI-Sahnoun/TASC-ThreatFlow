@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { SOURCES } = require('./sources.config');
 const { isDomain } = require('./domains');
 
-const KINDS = new Set(['rss','json_api','text_feed','osv','misp_feed','abuse_ch','kev','epss','nvd_cve','ransomware_live','feodo','unsupported']);
+const KINDS = new Set(['rss','json_api','text_feed','osv','misp_feed','abuse_ch','kev','epss','nvd_cve','msrc','ghsa','dshield','ransomware_live','feodo','unsupported']);
 
 test('registry has >=35 sources', () => { assert.ok(SOURCES.length >= 35, `got ${SOURCES.length}`); });
 

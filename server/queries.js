@@ -161,11 +161,15 @@ async function entityProfile(store, kind, name) {
 async function feed(store, { since = null, limit = 50 } = {}) {
   const capped = clampedInt(limit, 50, 1, 200);
   const params = [];
-  let clause = '';
+  // 'malware'/'ioc' are raw indicator dumps (ThreatFox/URLhaus/Feodo/DShield — "Cobalt Strike:
+  // 1.2.3.4:443", "Attacking IP: x.x.x.x"), not narrative intel. They're still fully browsable
+  // via the Intel Explorer, Arsenal, and IOC export — just not what a "Live intel" story stream
+  // is for.
+  const clauses = [`i.category NOT IN ('malware','ioc')`];
   // An unparseable `since` is treated as absent rather than left to fail as a raw timestamptz
   // cast error at the DB.
   if (since && !Number.isNaN(Date.parse(since))) {
-    params.push(since); clause = `WHERE cl.last_seen > $${params.length}`;
+    params.push(since); clauses.push(`cl.last_seen > $${params.length}`);
   }
 
   return store.all(
@@ -175,7 +179,7 @@ async function feed(store, { since = null, limit = 50 } = {}) {
        FROM clusters cl
        JOIN items i ON i.id = cl.primary_item_id
        JOIN sources s ON s.id = i.source_id
-       ${clause}
+      WHERE ${clauses.join(' AND ')}
       ORDER BY cl.last_seen DESC NULLS LAST
       LIMIT ${capped}`, params);
 }

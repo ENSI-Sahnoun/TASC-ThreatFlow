@@ -69,6 +69,14 @@ const INCONCLUSIVE_REASONS = ['unreachable', 'http-error'];
       } @else {
         <p class="summary muted">No summary provided</p>
       }
+      @if (url) {
+        <a class="source-link" [href]="url" target="_blank" rel="noopener noreferrer">
+          Read at source
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 17 17 7M8 7h9v9" />
+          </svg>
+        </a>
+      }
     </div>
 
     <ng-template #modalTpl>
@@ -212,6 +220,19 @@ const INCONCLUSIVE_REASONS = ['unreachable', 'http-error'];
     .summary.muted { color: #8e8e93; font-style: italic; }
     :host(.dark) .summary { color: #c7c7d9; }
     :host(.dark) .summary.muted { color: #7d7d94; }
+
+    /* Same darkened-accent reasoning as .frame-error-link: --accent washes out on the light
+       page canvas, so this uses a fixed readable variant rather than the app's raw token. */
+    .source-link {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 12px;
+      font-size: var(--fs-xs); font-weight: 590; color: #0a6b60; text-decoration: none;
+      transition: color var(--dur-fast) var(--ease-out);
+    }
+    .source-link:hover { color: #06514a; text-decoration: underline; text-underline-offset: 3px; }
+    .source-link:focus-visible { outline: 2px solid #0a6b60; outline-offset: 2px; border-radius: 3px; }
+    :host(.dark) .source-link { color: #32fae6; }
+    :host(.dark) .source-link:hover { color: #7dffef; }
+    :host(.dark) .source-link:focus-visible { outline-color: #32fae6; }
 
     /* Compact density for the arsenal table's hover popover — smaller chrome, tighter type,
        fixed width so it reads as a small floating card rather than the full drawer treatment. */

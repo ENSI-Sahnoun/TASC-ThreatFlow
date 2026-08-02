@@ -1,30 +1,29 @@
-import {
-  Component, ChangeDetectionStrategy, ElementRef, ViewChild, OnDestroy, OnInit, signal, computed,
-} from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { LaneComponent } from './lane.component';
-import { FeedRowComponent } from './feed-row.component';
-import { StoryDrawerComponent } from './story-drawer.component';
+import { Component, ChangeDetectionStrategy, ElementRef, ViewChild, OnInit, OnDestroy } from '@angular/core';
+import { FeedRowComponent } from '../dashboard/feed-row.component';
+import { StoryDrawerComponent } from '../dashboard/story-drawer.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
-import { FeedStreamBase } from './feed-stream-base';
+import { FeedStreamBase } from '../dashboard/feed-stream-base';
 
-// Unbounded, this lane just kept growing past whatever the neighboring lane's panels added up
-// to — a fixed cap plus a link out to the full `/live` page instead keeps the dashboard's two
-// columns roughly level.
-const INITIAL_ROW_COUNT = 20;
-const FEED_LIMIT = 50;
+// The backend's own cap on GET /api/feed (see server/queries.js#feed) — the most rows this page
+// could ever show regardless of what it asks for.
+const FEED_LIMIT = 200;
 
-// The live lane: streams `/api/feed` every 15s. See `FeedStreamBase` for the hover/pin/drawer
-// behavior shared with the full-page `/live` view; this class only adds the row cap and the
-// dashboard-specific template.
+// Full-page version of the dashboard's "Live intel" lane, routed at /live. Same live-polling,
+// hover-preview/pin/keyboard-walk drawer behavior (see FeedStreamBase) as the lane, just without
+// the lane's row cap — this is where its "Show more" link lands.
 @Component({
-  selector: 'tf-lane-live',
+  selector: 'tf-page-live-feed',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, LaneComponent, FeedRowComponent, StoryDrawerComponent, EmptyStateComponent, SkeletonComponent],
+  imports: [FeedRowComponent, StoryDrawerComponent, EmptyStateComponent, SkeletonComponent],
   template: `
-    <tf-lane title="Live intel" accent="var(--accent)">
+    <div class="live-page">
+      <header class="page-head">
+        <h1 class="tf-heading">Live intel</h1>
+        <p class="tagline">Everything as it lands, up to the last {{ feedLimitDisplay }} stories.</p>
+      </header>
+
       <div class="lane-sub">
         @if (newSinceWatermark() > 0) {
           <span class="since">{{ newSinceWatermark() }} new since {{ watermarkClock() }}</span>
@@ -39,13 +38,13 @@ const FEED_LIMIT = 50;
 
       <div class="rows" (mouseenter)="onContainerEnter()" (mouseleave)="onContainerLeave($event)">
         @if (loading()) {
-          <tf-skeleton [rows]="6" />
+          <tf-skeleton [rows]="10" />
         } @else if (loadError()) {
           <tf-empty-state title="Live feed unavailable" reason="GET /api/feed failed" />
         } @else if (visibleRows().length === 0) {
           <tf-empty-state reason="No recent intel in the current window" />
         } @else {
-          @for (row of shownRows(); track row.cluster_id) {
+          @for (row of visibleRows(); track row.cluster_id) {
             <tf-feed-row
               [row]="row"
               [isNew]="isRowNew(row)"
@@ -60,12 +59,7 @@ const FEED_LIMIT = 50;
           }
         }
       </div>
-      @if (visibleRows().length > 0) {
-        <a class="show-more" routerLink="/live">
-          @if (hiddenRowCount() > 0) { View {{ hiddenRowCount() }} more } @else { View full live feed }
-        </a>
-      }
-    </tf-lane>
+    </div>
 
     <tf-story-drawer
       #drawer
@@ -79,6 +73,11 @@ const FEED_LIMIT = 50;
     />
   `,
   styles: [`
+    .live-page { display: flex; flex-direction: column; gap: 16px; }
+    .page-head { display: flex; flex-direction: column; gap: 2px; }
+    .page-head h1 { margin: 0; font-size: var(--fs-xl); color: var(--ink); }
+    .page-head .tagline { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }
+
     .lane-sub { display: flex; align-items: center; gap: 8px; min-height: 20px; }
     .since { font-size: var(--fs-xs); color: var(--ink-2); }
     .pause-pill, .stale-pill {
@@ -87,26 +86,14 @@ const FEED_LIMIT = 50;
     .pause-pill { color: var(--ink); background: var(--accent-soft); }
     .stale-pill { color: var(--ink); background: color-mix(in srgb, var(--sev-high) 20%, transparent); }
     .rows { display: flex; flex-direction: column; gap: 2px; }
-    .show-more {
-      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
-      color: var(--ink-2); background: var(--surface-2); border: 0; align-self: flex-start;
-      padding: 6px 12px; border-radius: 8px; margin-top: 4px; text-decoration: none; display: inline-block;
-      transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-    }
-    .show-more:hover { color: var(--ink); background: var(--surface-3); }
-    .show-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .show-more:active { background: var(--surface-4); }
-    @media (prefers-reduced-motion: reduce) { .show-more { transition: none; } }
   `],
 })
-export class LaneLiveComponent extends FeedStreamBase implements OnInit, OnDestroy {
+export class LiveFeedPageComponent extends FeedStreamBase implements OnInit, OnDestroy {
   @ViewChild('drawer', { read: ElementRef }) private drawerElRef?: ElementRef<HTMLElement>;
   protected override get drawerEl(): ElementRef<HTMLElement> | undefined { return this.drawerElRef; }
   protected override get feedLimit(): number { return FEED_LIMIT; }
 
-  rowLimit = signal(INITIAL_ROW_COUNT);
-  shownRows = computed(() => this.visibleRows().slice(0, this.rowLimit()));
-  hiddenRowCount = computed(() => Math.max(0, this.visibleRows().length - this.rowLimit()));
+  readonly feedLimitDisplay = FEED_LIMIT;
 
   ngOnInit(): void {
     this.initWatermark();

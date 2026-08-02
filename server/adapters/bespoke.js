@@ -1,4 +1,5 @@
 const { normalizedItem } = require('./shape');
+const { categoryBucket } = require('../normalize');
 
 const kev = {
   async fetch(source, ctx) {
@@ -44,15 +45,123 @@ const epss = {
   },
 };
 
+const ghsa = {
+  // GitHub's public advisory DB — reviewed CVE/GHSA records with a real one-line `summary`
+  // field (unlike MSRC's updates index, nothing needs composing here) plus package/ecosystem
+  // and CVSS. Unauthenticated calls are rate-limited to 60/hr, so keep per_page modest.
+  async fetch(source, ctx) {
+    const limit = Math.min(Number(source.requestBody) || 30, 100);
+    const res = await ctx.request(`${source.url}?per_page=${limit}`, {
+      timeoutMs: 20000, headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'threatflow' },
+    });
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+    const records = JSON.parse(res.body);
+    if (!Array.isArray(records)) throw new Error('expected an array of advisories');
+    const bucket = categoryBucket(source.category);
+    return records.filter((r) => r.ghsa_id).map((r) => normalizedItem({
+      external_id: r.ghsa_id,
+      title: r.cve_id || r.ghsa_id,
+      summary: r.summary || null,
+      author: 'GitHub Advisory Database',
+      link: r.html_url || null,
+      published_at: r.published_at || null,
+      category: bucket,
+      raw: r,
+      native: {
+        cveIds: r.cve_id ? [r.cve_id] : [],
+        cvssScore: r.cvss?.score != null ? r.cvss.score : null,
+        cvssVector: r.cvss?.vector_string || null,
+        severity: r.severity ? String(r.severity).toLowerCase() : null,
+        // No `vendor`: vulnerabilities[].package is an ecosystem:package identifier
+        // ("go:github.com/kube-logging/logging-operator"), not a vendor name — the
+        // "Vendors affected" panel expects real company names (Microsoft, Ivanti, NETGEAR,
+        // as NVD/MSRC/Red Hat/KEV report them), and package strings drowned that list out.
+      },
+    }));
+  },
+};
+
+// SANS ISC's live top-attacker ranking — no per-record timestamp (it's a current snapshot,
+// not a dated history), so published_at is the sync time itself.
+const dshield = {
+  async fetch(source, ctx) {
+    const limit = Number(source.requestBody) || 20;
+    const res = await ctx.request(`${source.url}/${limit}?json`, { timeoutMs: 15000 });
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+    const rows = JSON.parse(res.body);
+    if (!Array.isArray(rows)) throw new Error('expected a JSON array of top attackers');
+    const now = (ctx.now ? ctx.now() : new Date()).toISOString();
+    const bucket = categoryBucket(source.category);
+    return rows.filter((r) => r.source).map((r) => normalizedItem({
+      external_id: r.source,
+      title: `Attacking IP: ${r.source}`,
+      summary: `Rank #${r.rank} — ${r.reports.toLocaleString()} reports across ${r.targets.toLocaleString()} target${r.targets === 1 ? '' : 's'} in the last 24h.`,
+      author: 'SANS Internet Storm Center',
+      link: `https://isc.sans.edu/ipinfo.html?ip=${r.source}`,
+      published_at: now,
+      category: bucket,
+      raw: r,
+      native: { iocs: [{ type: 'ip', value: r.source }] },
+    }));
+  },
+};
+
+const msrc = {
+  // MSRC's /cvrf/v3.0/updates list is a document index, not per-CVE detail — it has no
+  // description field at all. mapping.summary used to point at DocumentTitle, so every
+  // doc's summary was just its own title repeated; several titles (e.g. "Mariner Release
+  // Notes") repeat across dozens of distinct monthly docs, making them indistinguishable.
+  // ID/Alias/Severity/dates are present and unused — compose those instead.
+  async fetch(source, ctx) {
+    const res = await ctx.request(source.url, { timeoutMs: 20000, headers: { Accept: 'application/json' } });
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+    const records = JSON.parse(res.body).value || [];
+    return records.filter((r) => r.DocumentTitle).map((r) => normalizedItem({
+      external_id: r.ID || r.Alias,
+      title: r.Alias && r.Alias !== r.DocumentTitle ? `${r.DocumentTitle} (${r.Alias})` : r.DocumentTitle,
+      summary: [
+        r.Severity && `Severity: ${r.Severity}`,
+        r.InitialReleaseDate && `released ${r.InitialReleaseDate.slice(0, 10)}`,
+        r.CurrentReleaseDate && r.CurrentReleaseDate !== r.InitialReleaseDate && `updated ${r.CurrentReleaseDate.slice(0, 10)}`,
+      ].filter(Boolean).join(' — ') || null,
+      author: 'Microsoft MSRC',
+      link: r.CvrfUrl || null,
+      published_at: r.InitialReleaseDate || null,
+      category: 'vulnerability',
+      raw: r,
+      native: { severity: r.Severity ? String(r.Severity).toLowerCase() : null },
+    }));
+  },
+};
+
+const NVD_WINDOW_DAYS = 120;
+const NVD_RESULTS_PER_PAGE = 2000;
+const NVD_MAX_PAGES = 5;
+
 const nvdCve = {
   async fetch(source, ctx) {
     const fmt = (d) => d.toISOString().replace('Z', '');
     const now = ctx.now ? ctx.now() : new Date();
-    const lastWeek = new Date(now - 7 * 24 * 60 * 60 * 1000);
-    const url = `${source.url}?lastModStartDate=${fmt(lastWeek)}&lastModEndDate=${fmt(now)}&resultsPerPage=20`;
-    const res = await ctx.request(url, { timeoutMs: 20000 });
-    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-    const vulns = JSON.parse(res.body).vulnerabilities || [];
+    const windowStart = new Date(now - NVD_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const headers = source.api_key ? { apiKey: source.api_key } : {};
+    const sleep = ctx.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+    // NVD rate limit is 5 req/30s unauthenticated, 50 req/30s with an apiKey.
+    const delayMs = source.api_key ? 700 : 6500;
+
+    const vulns = [];
+    let startIndex = 0;
+    for (let page = 0; page < NVD_MAX_PAGES; page += 1) {
+      const url = `${source.url}?lastModStartDate=${fmt(windowStart)}&lastModEndDate=${fmt(now)}&resultsPerPage=${NVD_RESULTS_PER_PAGE}&startIndex=${startIndex}`;
+      const res = await ctx.request(url, { timeoutMs: 20000, headers });
+      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+      const body = JSON.parse(res.body);
+      vulns.push(...(body.vulnerabilities || []));
+      const totalResults = body.totalResults || 0;
+      startIndex += NVD_RESULTS_PER_PAGE;
+      if (startIndex >= totalResults) break;
+      await sleep(delayMs);
+    }
+
     return vulns.filter((v) => v.cve && v.cve.id).map((v) => {
       const cve = v.cve;
       const desc = (cve.descriptions || []).find((d) => d.lang === 'en');
@@ -249,4 +358,4 @@ const vulnetix = {
   },
 };
 
-module.exports = { kev, epss, nvd_cve: nvdCve, ransomware_live: ransomwareLive, feodo, vulnetix };
+module.exports = { kev, epss, nvd_cve: nvdCve, ransomware_live: ransomwareLive, feodo, vulnetix, msrc, ghsa, dshield };

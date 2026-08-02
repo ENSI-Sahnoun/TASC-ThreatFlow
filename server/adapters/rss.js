@@ -31,6 +31,15 @@ async function fetch(source, ctx) {
       raw: entry,
     }));
   }
+
+  // A summary that's byte-identical across 2+ items in the same fetch carries no
+  // per-item signal (e.g. CERT-EU repeats one "what is a Cyber Brief" paragraph on
+  // every entry) — drop it so the title, which does vary, isn't drowned out by
+  // repeated boilerplate.
+  const counts = new Map();
+  for (const item of out) if (item.summary) counts.set(item.summary, (counts.get(item.summary) || 0) + 1);
+  for (const item of out) if (item.summary && counts.get(item.summary) > 1) item.summary = null;
+
   return out;
 }
 module.exports = { fetch };

@@ -20,7 +20,7 @@ const SOURCES = [
   // --- Vendor advisories ---
   rss('Ubuntu Security Notices', ['vulnerability'], 'Vendor Advisory', 'https://ubuntu.com/security/notices/rss.xml'),
   { name: 'Red Hat Security Data', domains: ['vulnerability'], category: 'Vendor Advisory', kind: 'json_api', url: 'https://access.redhat.com/hydra/rest/securitydata/cve.json?per_page=25', active: true, tier: 'free-no-auth', recordsPath: null, mapping: { title: 'CVE', summary: 'bugzilla_description', link: 'resource_url', date: 'public_date', id: 'CVE' }, enrichHints: { cveField: 'CVE', cvssField: 'cvss3_score', severityField: 'severity' } },
-  { name: 'Microsoft MSRC', domains: ['cloud', 'identity', 'vulnerability'], category: 'Vendor Advisory', kind: 'json_api', url: 'https://api.msrc.microsoft.com/cvrf/v3.0/updates', active: true, tier: 'free-no-auth', recordsPath: 'value', mapping: { title: 'DocumentTitle', summary: 'DocumentTitle', link: 'CvrfUrl', date: 'InitialReleaseDate', id: 'ID' } },
+  { name: 'Microsoft MSRC', domains: ['cloud', 'identity', 'vulnerability'], category: 'Vendor Advisory', kind: 'msrc', url: 'https://api.msrc.microsoft.com/cvrf/v3.0/updates', active: true, tier: 'free-no-auth' },
   // --- Vulnerability DBs (bespoke + osv) ---
   { name: 'NVD CVE API', domains: ['vulnerability'], category: 'Vulnerability Intelligence', kind: 'nvd_cve', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0', active: true, tier: 'free-no-auth' },
   { name: 'CISA Known Exploited Vulnerabilities', domains: ['vulnerability', 'zero-day'], category: 'Vulnerability Intelligence', kind: 'kev', url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', requestBody: '100', active: true, tier: 'free-no-auth' },
@@ -28,14 +28,20 @@ const SOURCES = [
   { name: 'CIRCL Vulnerability-Lookup', domains: ['vulnerability'], category: 'Vulnerability Intelligence', kind: 'json_api', url: 'https://vulnerability.circl.lu/api/vulnerability/last/30', active: true, tier: 'free-no-auth', recordsPath: null, mapping: { title: 'id', summary: 'details', link: null, date: 'published', id: 'id' }, enrichHints: { cveField: 'id' } },
   { name: 'OSV.dev', domains: ['supply-chain', 'vulnerability'], category: 'Vulnerability Intelligence', kind: 'osv', url: 'https://api.osv.dev/v1/query', active: true, tier: 'free-no-auth' },
   rss('Exploit-DB', ['zero-day', 'vulnerability'], 'Vulnerability Intelligence', 'https://www.exploit-db.com/rss.xml'),
+  { name: 'GitHub Security Advisories', domains: ['supply-chain', 'vulnerability'], category: 'Vulnerability Intelligence', kind: 'ghsa', url: 'https://api.github.com/advisories', requestBody: '30', active: true, tier: 'free-no-auth' },
   // --- Malware IOCs / C2 (bespoke + abuse_ch) ---
   { name: 'abuse.ch Feodo Tracker', domains: ['malware'], category: 'Malware / C2', kind: 'feodo', url: 'https://feodotracker.abuse.ch/downloads/ipblocklist.json', requestBody: '80', active: true, tier: 'free-no-auth' },
   { name: 'abuse.ch URLhaus', domains: ['malware', 'phishing'], category: 'Malware / C2', kind: 'abuse_ch', url: 'https://urlhaus.abuse.ch/downloads/json_recent/', active: true, tier: 'free-no-auth', enrichHints: { iocField: 'url', iocType: 'url', familyField: 'tags' } },
   { name: 'abuse.ch ThreatFox', domains: ['malware'], category: 'Malware / C2', kind: 'abuse_ch', url: 'https://threatfox.abuse.ch/export/json/recent/', active: true, tier: 'free-no-auth', enrichHints: { iocField: 'ioc_value', iocTypeField: 'ioc_type', familyField: 'malware_printable' } },
+  { name: 'SANS ISC Top Attacking IPs', domains: ['network', 'malware'], category: 'Threat Intelligence', kind: 'dshield', url: 'https://isc.sans.edu/api/topips/records', requestBody: '20', active: true, tier: 'free-no-auth' },
   // --- Malware research blogs (rss) ---
   rss('Cisco Talos', ['malware', 'nation-state'], 'Malware Research', 'https://blog.talosintelligence.com/rss/'),
   rss('Palo Alto Unit 42', ['malware', 'nation-state'], 'Malware Research', 'https://unit42.paloaltonetworks.com/feed/'),
   rss('Malwarebytes Labs', ['malware'], 'Malware Research', 'https://www.malwarebytes.com/blog/feed/index.xml'),
+  rss('SentinelOne Labs', ['malware', 'nation-state'], 'Malware Research', 'https://www.sentinelone.com/labs/feed/'),
+  rss('Rapid7 Blog', ['malware', 'vulnerability'], 'Malware Research', 'https://www.rapid7.com/blog/rss/'),
+  rss('Recorded Future', ['nation-state', 'malware'], 'Threat Intelligence', 'https://www.recordedfuture.com/feed'),
+  rss('Wordfence Blog', ['vulnerability', 'malware'], 'Malware Research', 'https://www.wordfence.com/blog/feed/'),
   rss('Check Point Research', ['malware', 'nation-state'], 'Malware Research', 'https://research.checkpoint.com/feed/'),
   rss('The DFIR Report', ['ransomware', 'malware'], 'Malware Research', 'https://thedfirreport.com/feed/'),
   rss('SANS Internet Storm Center', ['malware'], 'OSINT', 'https://isc.sans.edu/rssfeed_full.xml'),

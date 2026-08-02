@@ -1,7 +1,6 @@
 import { Component, ChangeDetectionStrategy, OnInit, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { ApiService } from '../../core/api.service';
+import { SyncService } from '../../core/sync.service';
 import { KpiStripComponent } from './kpi-strip.component';
 import { LaneExploitedComponent } from './lane-exploited.component';
 import { LaneSpreadingComponent } from './lane-spreading.component';
@@ -25,32 +24,26 @@ import type { DashboardStats } from '../../core/models';
           <p class="tagline">Cybersecurity, made a business enabler — no compromises.</p>
         </div>
         <div class="sync-ctl">
-          <button type="button" class="sync-btn" [disabled]="syncing()" (click)="syncAll()">
-            @if (syncing()) { Syncing… } @else { Sync all sources }
+          <button type="button" class="sync-btn" [disabled]="sync.syncing()" (click)="syncAll()">
+            @if (sync.syncing()) { Syncing… } @else { Sync all sources }
           </button>
-          @if (syncResult(); as r) {
+          @if (sync.syncResult(); as r) {
             <span class="sync-result" [class.err]="r.fail > 0">
               {{ r.ok }}/{{ r.ok + r.fail }} synced
             </span>
           }
-          @if (syncError()) {
+          @if (sync.syncError()) {
             <span class="sync-result err">Sync failed</span>
           }
         </div>
       </div>
     </header>
-    @if (syncing() && !overlayDismissed()) {
+    @if (sync.syncing() && !sync.overlayDismissed()) {
       <div class="sync-overlay" role="status" aria-live="polite">
-        <div class="sync-logo" [innerHTML]="logoSvg()"></div>
+        <div class="sync-logo" [innerHTML]="sync.logoSvg()"></div>
         <p>Syncing sources…</p>
-        <button type="button" class="overlay-dismiss" (click)="dismissOverlay()">Continue in background</button>
+        <button type="button" class="overlay-dismiss" (click)="sync.dismissOverlay()">Continue in background</button>
       </div>
-    }
-    @if (syncing() && overlayDismissed()) {
-      <button type="button" class="sync-badge" (click)="reopenOverlay()" aria-label="Sync in progress, click to view">
-        <span class="sync-logo mini" [innerHTML]="logoSvg()"></span>
-        Syncing…
-      </button>
     }
     @if (loading()) {
       <tf-skeleton [rows]="8" />
@@ -104,23 +97,7 @@ import type { DashboardStats } from '../../core/models';
     }
     .overlay-dismiss:hover { color: var(--ink); border-color: var(--ink-2); }
     .overlay-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    /* Matches the KPI tile "widget" language elsewhere on this page (kpi-tile.component.ts):
-       flat accent-tinted surface, hairline border, chrome radius — no glass/blur/shadow, which
-       reads as a floating toast rather than a page-native control. */
-    .sync-badge {
-      position: fixed; right: 20px; bottom: 20px; z-index: var(--z-toast);
-      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 510; color: var(--ink-2);
-      display: flex; align-items: center; gap: 8px;
-      background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-      border: var(--hair) solid var(--hairline); border-radius: var(--radius-chrome);
-      padding: 6px 14px 6px 8px;
-      transition: background var(--dur) var(--ease-out), transform var(--dur-fast) var(--ease-out);
-    }
-    .sync-badge:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); transform: translateY(-1px); }
-    .sync-badge:active { transform: translateY(0) scale(.98); }
-    .sync-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .sync-logo { width: 72px; height: 100px; }
-    .sync-logo.mini { width: 20px; height: 28px; flex-shrink: 0; }
     /* [innerHTML] content is raw DOM Angular never compiled, so it carries none of the
        component's _ngcontent scoping attribute — plain scoped selectors can't reach it.
        ::ng-deep drops that attribute requirement for the rest of the selector. */
@@ -180,31 +157,14 @@ import type { DashboardStats } from '../../core/models';
 })
 export class DashboardComponent implements OnInit {
   private api = inject(ApiService);
-  private http = inject(HttpClient);
-  private sanitizer = inject(DomSanitizer);
+  sync = inject(SyncService);
 
   stats = signal<DashboardStats | null>(null);
   loading = signal(true);
   error = signal(false);
 
-  syncing = signal(false);
-  syncResult = signal<{ ok: number; fail: number } | null>(null);
-  syncError = signal(false);
-  overlayDismissed = signal(false);
-  logoSvg = signal<SafeHtml | null>(null);
-
   ngOnInit(): void {
     this.load();
-    this.fetchLogoSvg();
-  }
-
-  // The overlay pulses the mark's own path (see the .logo-path keyframes), which needs a
-  // `class` hook the raw asset doesn't have — tag it on before injecting the fetched markup.
-  private fetchLogoSvg(): void {
-    this.http.get('logo-mark.svg', { responseType: 'text' }).subscribe((raw) => {
-      const tagged = raw.replace('<path ', '<path class="logo-path" ');
-      this.logoSvg.set(this.sanitizer.bypassSecurityTrustHtml(tagged));
-    });
   }
 
   load(): void {
@@ -222,30 +182,7 @@ export class DashboardComponent implements OnInit {
     });
   }
 
-  dismissOverlay(): void {
-    this.overlayDismissed.set(true);
-  }
-
-  reopenOverlay(): void {
-    this.overlayDismissed.set(false);
-  }
-
   syncAll(): void {
-    this.syncing.set(true);
-    this.syncResult.set(null);
-    this.syncError.set(false);
-    this.overlayDismissed.set(false);
-    this.api.syncAll().subscribe({
-      next: (res) => {
-        const fail = res.results.filter((r) => r.error).length;
-        this.syncResult.set({ ok: res.results.length - fail, fail });
-        this.syncing.set(false);
-        this.load();
-      },
-      error: () => {
-        this.syncing.set(false);
-        this.syncError.set(true);
-      },
-    });
+    this.sync.syncAll(() => this.load());
   }
 }

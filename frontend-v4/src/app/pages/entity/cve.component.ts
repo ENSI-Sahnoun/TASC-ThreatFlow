@@ -164,12 +164,12 @@ import type { CveDetail } from '../../core/models';
       font-variant-numeric: tabular-nums;
     }
 
-    dl.timeline { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 0; }
+    dl.timeline { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 8px 0 0; }
     dl.timeline dt { font-size: var(--fs-xs); color: var(--ink-2); }
     dl.timeline dd { margin: 0; font-size: var(--fs-sm); color: var(--ink); }
     dl.timeline div { display: flex; flex-direction: column; gap: 2px; }
 
-    .description { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.5; white-space: pre-wrap; }
+    .description { margin: 0; font-size: var(--fs-md); color: color-mix(in srgb, var(--ink-2) 88%, var(--ink) 12%); line-height: 1.6; white-space: pre-wrap; }
 
     .stat-row { display: flex; flex-wrap: wrap; gap: 10px; }
     .stat-row tf-stat-card { flex: 1 1 160px; }

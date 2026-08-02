@@ -1,9 +1,11 @@
 import { Component, ElementRef, ViewChild, inject, signal, ChangeDetectionStrategy } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { map, catchError, of } from 'rxjs';
+import { map, catchError, of, filter } from 'rxjs';
+import { Router } from '@angular/router';
 import { ApiService } from '../core/api.service';
 import { ThemeService } from '../core/theme.service';
+import { SyncService } from '../core/sync.service';
 import { CommandPaletteComponent } from './command-palette.component';
 
 @Component({
@@ -52,6 +54,17 @@ import { CommandPaletteComponent } from './command-palette.component';
     }
 
     <main><router-outlet /></main>
+
+    <!-- Persists across route changes (the dashboard's own overlay/badge do not — that
+         component gets destroyed on navigation, which used to make "syncing" vanish from the
+         UI even though the sync-all request was still running server-side). Suppressed only
+         while the dashboard's own full-screen overlay is up, so the two don't stack. -->
+    @if (sync.syncing() && (!onDashboard() || sync.overlayDismissed())) {
+      <button type="button" class="sync-badge" (click)="reopenSyncOverlay()" aria-label="Sync in progress, click to view">
+        <span class="sync-logo" [innerHTML]="sync.logoSvg()"></span>
+        Syncing…
+      </button>
+    }
 
     @if (paletteOpen()) { <tf-command-palette (closed)="closePalette()" /> }
   `,
@@ -128,14 +141,54 @@ import { CommandPaletteComponent } from './command-palette.component';
       .nav { flex-wrap: wrap; row-gap: 8px; }
       nav { width: 100%; }
     }
+    /* Matches the KPI tile "widget" language on the dashboard (kpi-tile.component.ts): flat
+       accent-tinted surface, hairline border, chrome radius — no glass/blur/shadow, which
+       reads as a floating toast rather than a page-native control. */
+    .sync-badge {
+      position: fixed; right: 20px; bottom: 20px; z-index: var(--z-toast);
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 510; color: var(--ink-2);
+      display: flex; align-items: center; gap: 8px;
+      background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+      border: var(--hair) solid var(--hairline); border-radius: var(--radius-chrome);
+      padding: 6px 14px 6px 8px;
+      transition: background var(--dur) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+    }
+    .sync-badge:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); transform: translateY(-1px); }
+    .sync-badge:active { transform: translateY(0) scale(.98); }
+    .sync-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .sync-logo { width: 20px; height: 28px; flex-shrink: 0; }
+    /* [innerHTML] content is raw DOM Angular never compiled, so it carries none of the
+       component's _ngcontent scoping attribute — plain scoped selectors can't reach it.
+       ::ng-deep drops that attribute requirement for the rest of the selector. */
+    .sync-logo ::ng-deep svg { width: 100%; height: 100%; display: block; }
+    .sync-logo ::ng-deep .logo-path {
+      fill: var(--accent); stroke: var(--accent); stroke-opacity: 1; stroke-width: 3;
+      stroke-linecap: round; stroke-linejoin: round;
+      animation: logo-pulse 1.6s linear infinite;
+    }
+    @keyframes logo-pulse {
+      0%   { fill-opacity: 1; }
+      62%  { fill-opacity: 1; animation-timing-function: ease-in; }
+      80%  { fill-opacity: .12; animation-timing-function: ease-out; }
+      100% { fill-opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sync-logo ::ng-deep .logo-path { animation: none; fill-opacity: 1; }
+    }
   `],
   host: { '(document:keydown)': 'onKey($event)' },
 })
 export class ShellComponent {
   private api = inject(ApiService);
+  private router = inject(Router);
   theme = inject(ThemeService);
+  sync = inject(SyncService);
   paletteOpen = signal(false);
   logoSwapping = signal(false);
+  onDashboard = toSignal(
+    this.router.events.pipe(filter((e) => e instanceof NavigationEnd), map(() => this.router.url === '/')),
+    { initialValue: this.router.url === '/' },
+  );
   // Guarded against errors: a failed fetch must not blank the whole shell (which owns
   // <router-outlet>) — it just means the degradation banner has nothing to report this time.
   health = toSignal(
@@ -167,6 +220,11 @@ export class ShellComponent {
     this.theme.toggle();
     this.logoSwapping.set(true);
     setTimeout(() => this.logoSwapping.set(false), 240);
+  }
+
+  reopenSyncOverlay(): void {
+    this.sync.reopenOverlay();
+    if (!this.onDashboard()) this.router.navigateByUrl('/');
   }
 
   openPalette(): void {

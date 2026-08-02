@@ -35,8 +35,10 @@ interface EntityLink { key: string; label: string; path: string[]; }
 
       <section class="header">
         <div class="head-row">
-          <tf-source-dot [status]="sourceStatus()" [name]="d.source_name ?? 'Unknown source'" />
-          <span class="source-name">{{ d.source_name ?? 'Unknown source' }}</span>
+          @if (sourceFetchKind() !== null && sourceFetchKind() !== 'rss') {
+            <tf-source-dot [status]="sourceStatus()" [name]="d.source_name ?? 'Unknown source'" />
+            <span class="source-name">{{ d.source_name ?? 'Unknown source' }}</span>
+          }
           <span class="time">{{ relativeTime(d.published_at) }}</span>
           <tf-chip [severity]="d.severity" />
         </div>

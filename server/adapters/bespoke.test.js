@@ -97,3 +97,85 @@ test('vulnetix merges /exploits into a matching /gcve CVE and adds exploits-only
   assert.strictEqual(exploitsOnly.summary, 'Actively exploited in the wild.');
   assert.strictEqual(exploitsOnly.author, 'CISA');
 });
+
+test('nvd_cve paginates a wider window and passes an apiKey header when present', async () => {
+  const page0 = JSON.stringify({
+    totalResults: 2500,
+    vulnerabilities: [{ cve: { id: 'CVE-2026-0001', descriptions: [{ lang: 'en', value: 'First page.' }], published: '2026-06-01T00:00:00.000' } }],
+  });
+  const page1 = JSON.stringify({
+    totalResults: 2500,
+    vulnerabilities: [{ cve: { id: 'CVE-2026-0002', descriptions: [{ lang: 'en', value: 'Second page.' }], published: '2026-06-02T00:00:00.000' } }],
+  });
+  const seenUrls = [];
+  const seenHeaders = [];
+  const source = { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0', api_key: 'nvd-key' };
+  const ctx = {
+    now: () => new Date('2026-07-30T00:00:00Z'),
+    sleep: async () => {},
+    request: async (url, opts) => {
+      seenUrls.push(url);
+      seenHeaders.push(opts.headers);
+      return { status: 200, headers: {}, body: seenUrls.length === 1 ? page0 : page1 };
+    },
+  };
+  const items = await bespoke.nvd_cve.fetch(source, ctx);
+  assert.strictEqual(seenUrls.length, 2);
+  assert.match(seenUrls[0], /lastModStartDate=2026-04-01T00:00:00\.000&lastModEndDate=2026-07-30T00:00:00\.000&resultsPerPage=2000&startIndex=0/);
+  assert.match(seenUrls[1], /startIndex=2000/);
+  assert.strictEqual(seenHeaders[0].apiKey, 'nvd-key');
+  assert.strictEqual(items.length, 2);
+  assert.strictEqual(items[0].external_id, 'CVE-2026-0001');
+  assert.strictEqual(items[1].external_id, 'CVE-2026-0002');
+});
+
+test('msrc composes title/summary from ID/Alias/Severity/dates, not the missing description field', async () => {
+  const body = JSON.stringify({
+    value: [
+      { ID: '2011-Aug', Alias: '2011-Aug', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2011-08-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T14:28:28Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2011-Aug' },
+      { ID: '2000-Jan', Alias: '2000-Jan', DocumentTitle: 'Mariner Release Notes', Severity: null, InitialReleaseDate: '2000-01-02T00:00:00Z', CurrentReleaseDate: '2026-02-18T01:04:13Z', CvrfUrl: 'https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2000-Jan' },
+    ],
+  });
+  const source = { url: 'x' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
+  const items = await bespoke.msrc.fetch(source, ctx);
+  assert.strictEqual(items.length, 2);
+  assert.notStrictEqual(items[0].title, items[1].title);
+  assert.match(items[0].title, /Mariner Release Notes \(2011-Aug\)/);
+  assert.match(items[0].summary, /released 2011-08-02/);
+  assert.match(items[0].summary, /updated 2026-02-18/);
+});
+
+test('ghsa maps summary and cvss from a real advisory shape, without faking a vendor from the package id', async () => {
+  const body = JSON.stringify([{
+    ghsa_id: 'GHSA-c9hr-64h3-gxpc', cve_id: 'CVE-2026-67424', html_url: 'https://github.com/advisories/GHSA-c9hr-64h3-gxpc',
+    summary: 'Guarded HTTP modules follow redirects into internal space without per-hop SSRF revalidation',
+    severity: 'high', published_at: '2026-07-30T14:48:16Z',
+    cvss: { score: 8.5, vector_string: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:L/A:N' },
+    vulnerabilities: [{ package: { ecosystem: 'pip', name: 'flyto-core' } }],
+  }]);
+  const source = { url: 'x', category: 'Vulnerability Intelligence' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
+  const items = await bespoke.ghsa.fetch(source, ctx);
+  assert.strictEqual(items[0].external_id, 'GHSA-c9hr-64h3-gxpc');
+  assert.strictEqual(items[0].title, 'CVE-2026-67424');
+  assert.match(items[0].summary, /SSRF revalidation/);
+  assert.strictEqual(items[0].native.cvssScore, 8.5);
+  assert.strictEqual(items[0].native.severity, 'high');
+  assert.strictEqual(items[0].native.vendor, null);
+  assert.strictEqual(items[0].category, 'cve');
+});
+
+test('dshield builds one item per attacking IP with rank/reports/targets, no per-record date', async () => {
+  const body = JSON.stringify([{ rank: 1, source: '13.94.254.200', reports: 319739, targets: 1 }]);
+  const source = { url: 'https://isc.sans.edu/api/topips/records', requestBody: '20', category: 'Threat Intelligence' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }), now: () => new Date('2026-07-30T00:00:00Z') };
+  const items = await bespoke.dshield.fetch(source, ctx);
+  assert.strictEqual(items[0].external_id, '13.94.254.200');
+  assert.match(items[0].title, /13\.94\.254\.200/);
+  assert.match(items[0].summary, /Rank #1/);
+  assert.match(items[0].summary, /319,739 reports/);
+  assert.strictEqual(items[0].published_at, '2026-07-30T00:00:00.000Z');
+  assert.deepStrictEqual(items[0].native.iocs, [{ type: 'ip', value: '13.94.254.200' }]);
+  assert.strictEqual(items[0].category, 'ioc');
+});

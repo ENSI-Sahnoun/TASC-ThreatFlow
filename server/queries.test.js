@@ -117,6 +117,19 @@ test('feed returns clustered rows and search finds across types', async () => {
   });
 });
 
+test('feed excludes raw malware/ioc dumps — narrative categories only', async () => {
+  await withTestStore(async (store) => {
+    const { src } = await seed(store);
+    const iocItem = await store.get(
+      `INSERT INTO items (source_id, category, title, published_at) VALUES ($1,'ioc','Attacking IP: 1.2.3.4', now()) RETURNING id`,
+      [src.id]);
+    await consolidate(store);
+    const rows = await feed(store, { limit: 10 });
+    assert.ok(rows.every((r) => r.category !== 'ioc'));
+    assert.ok(!rows.some((r) => r.item_id === iocItem.id));
+  });
+});
+
 test('iocRows severity=unknown matches NULL rows, not just the literal string', async () => {
   await withTestStore(async (store) => {
     const { src } = await seed(store);   // one 'critical' item with IOC 1.2.3.4

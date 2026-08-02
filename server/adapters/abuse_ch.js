@@ -1,5 +1,31 @@
 const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
+const { humanizeToken } = require('../present');
+
+// URLhaus tags come as an array, ThreatFox's as a comma-joined string — normalize both
+// to a short joined list.
+function tagsOf(rec) {
+  const t = rec.tags;
+  if (Array.isArray(t)) return t.filter(Boolean).join(', ') || null;
+  if (typeof t === 'string' && t.trim()) return t;
+  return null;
+}
+
+// ThreatFox/URLhaus records carry rich per-entry fields (confidence, status, tags,
+// reporter, first/last-seen) that the bare threat_type/threat label discards — without
+// this every entry collapses to the same 2-word phrase ("Botnet C2", "Malware download").
+function iocSummary(rec) {
+  const label = rec.threat_type || rec.threat;
+  return [
+    label && humanizeToken(label),
+    rec.confidence_level != null && `confidence ${rec.confidence_level}%`,
+    rec.url_status && `status: ${rec.url_status}`,
+    tagsOf(rec) && `tags: ${tagsOf(rec)}`,
+    rec.reporter && `reported by ${rec.reporter}`,
+    rec.last_seen_utc && rec.last_seen_utc !== rec.first_seen_utc && `last seen ${rec.last_seen_utc}`,
+    rec.dateadded && `added ${rec.dateadded}`,
+  ].filter(Boolean).join(' — ') || null;
+}
 
 function authHeaders(source) {
   if (source.api_key) return { [(source.auth && source.auth.header) || source.api_key_header || 'Auth-Key']: source.api_key };
@@ -52,7 +78,7 @@ async function fetch(source, ctx) {
         .filter(Boolean).join(' — ') || null;
     } else {
       title = `${families[0] || 'IOC'}: ${iocValue || '(unknown)'}`;
-      summary = rec.threat_type || rec.threat || rec.tags?.join(', ') || null;
+      summary = iocSummary(rec);
     }
 
     out.push(normalizedItem({
