@@ -10,7 +10,7 @@ const { dashboardStats } = require('./stats');
 const { normalizeUrl } = require('./urlnorm');
 const { consolidate } = require('./consolidate');
 const { startScheduler } = require('./scheduler');
-const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows } = require('./queries');
+const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, maxAgeClause } = require('./queries');
 
 const CONFIG_BY_NAME = configByName();
 
@@ -208,6 +208,10 @@ function createApp(store) {
     // dominate any unfiltered or cross-category list. They're reachable only through the URL
     // checker (GET /api/ioc-check), which queries item_iocs directly and isn't affected by this.
     where.push("items.category <> 'phishing'");
+    // Stale rows stay in the database and remain reachable via ?maxAgeDays=0 and search;
+    // they just do not lead the default listing. Undated rows pass through.
+    const ageSql = maxAgeClause(req.query.maxAgeDays, ph);
+    if (ageSql) where.push(ageSql);
     if (category) where.push(`items.category = ${ph(category)}`);
     if (source_id) where.push(`items.source_id = ${ph(source_id)}`);
     if (q) {

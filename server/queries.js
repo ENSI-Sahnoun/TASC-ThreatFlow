@@ -13,6 +13,20 @@ function numOrUndefined(v) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// NVD's backlog re-analysis put 10,232 rows older than five years into the corpus. They stay
+// in the database and remain searchable; default listings just do not lead with them.
+const DEFAULT_MAX_AGE_DAYS = 365;
+
+// published_at IS NULL means "unknown age", not "old" — dropping the 1,410 undated rows would
+// repeat the very defect this filter exists to fix. Pass 0 to disable the filter entirely.
+function maxAgeClause(maxAgeDays, ph) {
+  const raw = maxAgeDays === undefined || maxAgeDays === null || maxAgeDays === ''
+    ? DEFAULT_MAX_AGE_DAYS
+    : Number(maxAgeDays);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return `(items.published_at IS NULL OR items.published_at >= now() - (${ph(raw)} || ' days')::interval)`;
+}
+
 function clampedInt(v, def, min, max) {
   const n = numOrUndefined(v);
   const int = n === undefined ? def : Math.trunc(n);
@@ -266,4 +280,4 @@ async function iocRows(store, filters = {}) {
       LIMIT 5000`, params);
 }
 
-module.exports = { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, COVERAGE_FIELDS };
+module.exports = { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, COVERAGE_FIELDS, DEFAULT_MAX_AGE_DAYS, maxAgeClause };

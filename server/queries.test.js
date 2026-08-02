@@ -154,3 +154,29 @@ test('feed/search/iocRows treat malformed limit and source_id as absent, not a D
     assert.deepStrictEqual(iocs.map((i) => i.value), ['1.2.3.4']);
   });
 });
+
+const { DEFAULT_MAX_AGE_DAYS, maxAgeClause } = require('./queries');
+
+test('DEFAULT_MAX_AGE_DAYS is one year', () => {
+  assert.strictEqual(DEFAULT_MAX_AGE_DAYS, 365);
+});
+
+test('maxAgeClause tolerates NULL published_at so undated rows survive', () => {
+  const params = [];
+  const ph = (v) => { params.push(v); return `$${params.length}`; };
+  const sql = maxAgeClause(365, ph);
+  assert.match(sql, /items\.published_at IS NULL/);
+  assert.deepStrictEqual(params, [365]);
+});
+
+test('maxAgeClause returns null for 0 and for malformed input', () => {
+  const ph = () => '$1';
+  for (const v of [0, '0', -5, 'abc', NaN]) assert.strictEqual(maxAgeClause(v, ph), null);
+});
+
+test('maxAgeClause defaults a missing value to DEFAULT_MAX_AGE_DAYS', () => {
+  const params = [];
+  const ph = (v) => { params.push(v); return `$${params.length}`; };
+  assert.ok(maxAgeClause(undefined, ph));
+  assert.deepStrictEqual(params, [365]);
+});
