@@ -96,12 +96,10 @@ function scoreRelevance(profile, item, now = new Date()) {
 
   const floor = profile.severity_floor || 'medium';
   const atLeastHigh = meetsFloor(severity, 'high');
-  const isCritical = severity === 'critical';
   const atFloor = meetsFloor(severity, floor);
 
   let tier;
   if (assetMatch && (kev || atLeastHigh) && recent) tier = 'act_now';
-  else if (kev && domainMatch && isCritical) tier = 'act_now';
   else if (assetMatch) tier = 'watch';
   else if (domainMatch && atFloor && recent) tier = 'watch';
   else if (sectorMatch && recent) tier = 'watch';
