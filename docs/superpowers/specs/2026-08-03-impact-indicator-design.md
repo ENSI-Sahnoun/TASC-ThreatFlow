@@ -31,6 +31,27 @@ This work is two subsystems sharing one foundation. They are specified and built
 
 Spec A ships complete and useful on its own.
 
+### Why A before B, measured
+
+Spec B was considered first, on the theory that CISA KEV `requiredAction` and NVD references
+tagged `Patch` are already ingested and need nothing from A. Measured against the live corpus on
+2026-08-03 (11,149 items, 9,338 consolidated CVEs):
+
+| grounding available without Spec A | items | share |
+|---|---|---|
+| KEV `requiredAction` | 104 | 0.9% |
+| NVD reference tagged `Patch` | 1,542 | 13.8% |
+| NVD reference tagged `Vendor Advisory` | 2,577 | 23.1% |
+
+The union of the NVD tags is roughly a quarter of the corpus, and it is the quarter where the
+honest playbook is little more than a link to the vendor's patch. The remaining ~75% fall to the
+derived-skeleton path, which is Spec A's fact extraction with a different renderer.
+
+Ordering is also a correctness matter, not only a coverage one. Playbooks attach to `act_now` and
+`watch`, and those tiers are currently reachable by a vendor-level match. Building B first renders
+step-by-step remediation for a product the user may not run — confidently wrong instructions, the
+same failure class `BREACH_CLAIM_RE` exists to prevent.
+
 ## Audience
 
 A non-expert owner or IT generalist. Consequence means a plain outcome — "someone could read your
