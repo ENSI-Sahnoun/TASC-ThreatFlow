@@ -296,6 +296,26 @@ async function applySchema(s = store) {
     -- Deterministic consequence slots, materialized by the same pure pass that writes tier.
     -- Nullable: rows written before this column existed carry NULL until the next recompute.
     ALTER TABLE item_relevance ADD COLUMN IF NOT EXISTS consequence JSONB;
+
+    -- One-time migration per profile, expressed idempotently so a re-apply is a no-op. Every
+    -- profile created before profile_assets existed keeps its act_now lane: its products[]
+    -- entries become assets at 'unknown' exposure, which the ladder still allows to reach
+    -- act_now. The vendor is recovered by joining item_cpes; a slug appearing under several
+    -- vendors yields one row per vendor, because the profile never recorded which it meant,
+    -- and a slug matching nothing is skipped.
+    --
+    -- The NOT EXISTS guard is what makes this a migration rather than a policy: without it,
+    -- every boot would reinstate an asset the user had deliberately deleted. The residual
+    -- edge case is a profile whose assets are ALL removed while products[] still lists them —
+    -- that one reseeds on the next boot. Clearing products[] alongside is the fix, and the
+    -- profile editor does exactly that.
+    INSERT INTO profile_assets (profile_id, vendor, product, exposure)
+    SELECT DISTINCT p.id, c.vendor, c.product, 'unknown'
+      FROM profiles p
+      JOIN LATERAL unnest(p.products) AS prod(slug) ON true
+      JOIN item_cpes c ON c.product = prod.slug
+     WHERE NOT EXISTS (SELECT 1 FROM profile_assets pa WHERE pa.profile_id = p.id)
+    ON CONFLICT (profile_id, vendor, product) DO NOTHING;
   `);
 }
 

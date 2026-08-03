@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { makeTempDb } = require('./test-helpers');
+const { applySchema } = require('./db');
 
 test('items has enrichment columns', async () => {
   const { store, cleanup } = await makeTempDb();
@@ -126,5 +127,74 @@ test('items.cvss_vector and item_relevance.consequence exist', async () => {
         WHERE (table_name='items' AND column_name='cvss_vector')
            OR (table_name='item_relevance' AND column_name='consequence')`);
     assert.strictEqual(cols.length, 2);
+  } finally { await cleanup(); }
+});
+
+test('applySchema seeds profile_assets from legacy products[] at unknown exposure', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, url, fetch_kind) VALUES ('s','http://x','rss') RETURNING id");
+    const i = await store.get(
+      "INSERT INTO items (source_id, external_id, title, category) VALUES ($1,'e1','t','cve') RETURNING id", [s.id]);
+    await store.run(
+      "INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')",
+      [i.id]);
+    await store.run(
+      "INSERT INTO profiles (name, sector, products) VALUES ('legacy','finance','{fortios,ghost}')");
+
+    await applySchema(store);   // idempotent re-apply performs the seed
+
+    const rows = await store.all('SELECT vendor, product, exposure FROM profile_assets');
+    // 'ghost' matches no item_cpes row and is skipped — storing it would store a value that
+    // can never match anything.
+    assert.deepStrictEqual(rows, [
+      { vendor: 'fortinet', product: 'fortios', exposure: 'unknown' },
+    ]);
+  } finally { await cleanup(); }
+});
+
+test('a product slug under several vendors seeds one row per vendor', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, url, fetch_kind) VALUES ('s','http://x','rss') RETURNING id");
+    const i = await store.get(
+      "INSERT INTO items (source_id, external_id, title, category) VALUES ($1,'e1','t','cve') RETURNING id", [s.id]);
+    for (const v of ['acme', 'globex']) {
+      await store.run(
+        "INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a',$2,'router_os')",
+        [i.id, v]);
+    }
+    await store.run(
+      "INSERT INTO profiles (name, sector, products) VALUES ('multi','finance','{router_os}')");
+
+    await applySchema(store);
+
+    const rows = await store.all('SELECT vendor FROM profile_assets ORDER BY vendor');
+    assert.deepStrictEqual(rows.map((r) => r.vendor), ['acme', 'globex']);
+  } finally { await cleanup(); }
+});
+
+test('the seed is idempotent and never resurrects a removed asset', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, url, fetch_kind) VALUES ('s','http://x','rss') RETURNING id");
+    const i = await store.get(
+      "INSERT INTO items (source_id, external_id, title, category) VALUES ($1,'e1','t','cve') RETURNING id", [s.id]);
+    await store.run(
+      "INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')",
+      [i.id]);
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector, products) VALUES ('legacy','finance','{fortios}') RETURNING id");
+
+    await applySchema(store);
+    // A user deliberately removing an asset must not have it reinstated on the next boot.
+    await store.run('UPDATE profiles SET products = $1 WHERE id = $2', [[], p.id]);
+    await store.run('DELETE FROM profile_assets WHERE profile_id = $1', [p.id]);
+    await applySchema(store);
+
+    assert.deepStrictEqual(await store.all('SELECT * FROM profile_assets'), []);
   } finally { await cleanup(); }
 });
