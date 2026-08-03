@@ -99,6 +99,25 @@ async function applySchema(s = store) {
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Precise tech-stack rows. profiles.vendors/products are retained for backward
+    -- compatibility and keep feeding the low tier; only a profile_assets row can earn
+    -- act_now, because a vendor-level claim ("we use Microsoft software") is not evidence of
+    -- exposure to a specific flaw. 'microsoft' matches 7519 item_cpes rows.
+    --
+    -- exposure is the crossing that turns a CVSS vector into a statement about the reader:
+    -- AV:N alone is a property of the flaw, AV:N on an internet-facing asset is personal.
+    -- It defaults to 'unknown', never 'internal' — assuming an unanswered question is safe
+    -- would silently demote an actively-exploited flaw.
+    CREATE TABLE IF NOT EXISTS profile_assets (
+      profile_id INT  NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      vendor     TEXT NOT NULL,
+      product    TEXT NOT NULL,
+      exposure   TEXT NOT NULL DEFAULT 'unknown'
+                 CHECK (exposure IN ('internet','internal','unknown')),
+      UNIQUE(profile_id, vendor, product)
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_assets_product ON profile_assets(vendor, product);
+
     -- Materialized because sorting 24k rows by tier has to happen in SQL — a page cannot be
     -- sorted by a value that has not been computed. Keyed by profile_version so a profile edit
     -- invalidates verdicts; superseded versions are left orphaned rather than deleted, so
@@ -273,6 +292,10 @@ async function applySchema(s = store) {
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_due_date DATE;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_vector TEXT;
+    -- Deterministic consequence slots, materialized by the same pure pass that writes tier.
+    -- Nullable: rows written before this column existed carry NULL until the next recompute.
+    ALTER TABLE item_relevance ADD COLUMN IF NOT EXISTS consequence JSONB;
   `);
 }
 

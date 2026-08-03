@@ -75,3 +75,56 @@ test('applySchema is idempotent', async () => {
     await cleanup();
   }
 });
+
+// --- Impact indicator (Spec A) ---
+
+test('profile_assets exists with an exposure check constraint', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('t','finance') RETURNING id");
+    await store.run(
+      `INSERT INTO profile_assets (profile_id, vendor, product, exposure)
+       VALUES ($1,'fortinet','fortios','internet')`, [p.id]);
+    await assert.rejects(() => store.run(
+      `INSERT INTO profile_assets (profile_id, vendor, product, exposure)
+       VALUES ($1,'fortinet','fortiproxy','sometimes')`, [p.id]));
+  } finally { await cleanup(); }
+});
+
+test('profile_assets cascades when its profile is deleted', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('t','finance') RETURNING id");
+    await store.run(
+      `INSERT INTO profile_assets (profile_id, vendor, product, exposure)
+       VALUES ($1,'fortinet','fortios','internet')`, [p.id]);
+    await store.run('DELETE FROM profiles WHERE id = $1', [p.id]);
+    assert.strictEqual((await store.all('SELECT * FROM profile_assets')).length, 0);
+  } finally { await cleanup(); }
+});
+
+test('exposure defaults to unknown rather than assuming internal', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('t','finance') RETURNING id");
+    await store.run(
+      "INSERT INTO profile_assets (profile_id, vendor, product) VALUES ($1,'fortinet','fortios')",
+      [p.id]);
+    const row = await store.get('SELECT exposure FROM profile_assets');
+    assert.strictEqual(row.exposure, 'unknown');
+  } finally { await cleanup(); }
+});
+
+test('items.cvss_vector and item_relevance.consequence exist', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const cols = await store.all(
+      `SELECT table_name, column_name FROM information_schema.columns
+        WHERE (table_name='items' AND column_name='cvss_vector')
+           OR (table_name='item_relevance' AND column_name='consequence')`);
+    assert.strictEqual(cols.length, 2);
+  } finally { await cleanup(); }
+});
