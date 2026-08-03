@@ -198,6 +198,7 @@ export interface Profile {
   region: string | null;
   severity_floor: string;
   profile_version: number;
+  assets: ProfileAsset[];
 }
 
 export interface SectorRecommendation {
@@ -224,6 +225,9 @@ export interface ProfilePayload {
   threatDomains: string[];
   region: string | null;
   severityFloor: string;
+  // The server resolves each asset's vendor from item_cpes, so the client sends product and
+  // exposure only — CpeFacet carries no vendor to send.
+  assets?: { product: string; exposure: Exposure }[];
 }
 
 // GET /api/domains — the threat-domain vocabulary with corpus counts, used by the survey's
@@ -237,6 +241,36 @@ export interface RelevanceMatch {
   value: string;
 }
 
+export type Exposure = 'internet' | 'internal' | 'unknown';
+
+// One consequence fact. `from` is the metrics it was derived from, shown in the UI so the claim
+// is auditable rather than asserted — it is display text, never a data channel to parse.
+export interface ConsequenceSlot {
+  text: string;
+  from: string;
+  // Only urgency carries this: CISA's KEV remediation deadline as a bare YYYY-MM-DD.
+  due?: string | null;
+}
+
+// What would actually happen, as opposed to `matches`, which says why it applies to you.
+// Every slot is independently nullable: a null slot means the source data did not say, and is
+// rendered as a stated gap, never as a blank or a guess.
+export interface Consequence {
+  reach: ConsequenceSlot | null;
+  impact: ConsequenceSlot | null;
+  role: ConsequenceSlot | null;
+  urgency: ConsequenceSlot | null;
+  exposure?: Exposure;
+}
+
+// The tech-stack rows that actually earn urgency. The legacy vendors/products arrays are kept
+// but cap at the `low` tier.
+export interface ProfileAsset {
+  vendor: string;
+  product: string;
+  exposure: Exposure;
+}
+
 // null only when no profile is active. With one, every item carries a tier — an item not yet
 // scored reads as not_yours rather than null.
 export interface Relevance {
@@ -245,6 +279,10 @@ export interface Relevance {
   // Model-written wording, null whenever it has not been generated. The tier never depends on
   // it, so an unreachable Ollama costs nicer phrasing and nothing else.
   sentence?: string | null;
+  // Deterministic. null for a row scored before the column existed, or one the recompute has
+  // not reached yet.
+  consequence?: Consequence | null;
+  exposure?: Exposure;
 }
 
 // Model-assigned signal quality. Purely advisory: a non-intel verdict demotes an item in the

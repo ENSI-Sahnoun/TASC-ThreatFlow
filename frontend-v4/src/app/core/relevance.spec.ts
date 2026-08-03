@@ -12,10 +12,12 @@ describe('tier presentation', () => {
     expect([...TIER_ORDER]).toEqual(['act_now', 'watch', 'low', 'not_yours']);
   });
 
-  it('labels every tier in plain language', () => {
+  // Labels name an action, not a mood. "Watch" and "Low" described a feeling about an item and
+  // left the reader with nothing to do about it.
+  it('labels every tier with an action', () => {
     expect(tierLabel('act_now')).toBe('Act now');
-    expect(tierLabel('watch')).toBe('Watch');
-    expect(tierLabel('low')).toBe('Low');
+    expect(tierLabel('watch')).toBe('Plan a fix');
+    expect(tierLabel('low')).toBe('Background');
     expect(tierLabel('not_yours')).toBe('Not yours');
   });
 
@@ -132,5 +134,85 @@ describe('quality badge', () => {
     expect(qualityHint('promotion')).toContain('not hidden');
     expect(qualityHint('roundup')).toContain('local model');
     expect(qualityHint('intel')).toBe('');
+  });
+});
+
+// --- Impact indicator (Spec A) ---
+
+import { tierSubline, slotText, hasConsequence } from './relevance';
+import type { Relevance } from './models';
+
+const rel = (over: Partial<Relevance> = {}): Relevance => ({
+  tier: 'act_now',
+  matches: [],
+  sentence: null,
+  exposure: 'internet',
+  consequence: {
+    reach: { text: 'anyone on the internet', from: 'AV:N/PR:N/UI:N + exposure=internet' },
+    impact: null,
+    role: null,
+    urgency: { text: 'already used in real attacks', due: '2026-08-17', from: 'KEV' },
+    exposure: 'internet',
+  },
+  ...over,
+} as Relevance);
+
+describe('tier sub-lines', () => {
+  it('uses the CISA deadline for act_now when there is one', () => {
+    expect(tierSubline(rel())).toContain('Aug 17');
+  });
+
+  it('falls back to a fixed window when act_now has no deadline', () => {
+    const r = rel({ consequence: {
+      reach: null, impact: null, role: null,
+      urgency: { text: 'likely to be attacked soon', due: null, from: 'EPSS>=0.5' },
+    } } as Partial<Relevance>);
+    expect(tierSubline(r)).toBe('within 48 hours');
+  });
+
+  it('falls back to a fixed window when act_now has no urgency slot at all', () => {
+    const r = rel({ consequence: { reach: null, impact: null, role: null, urgency: null } } as Partial<Relevance>);
+    expect(tierSubline(r)).toBe('within 48 hours');
+  });
+
+  it('reads watch as a plan, not a vigil', () => {
+    expect(tierLabel('watch')).toBe('Plan a fix');
+    expect(tierSubline(rel({ tier: 'watch' }))).toBe('this month');
+  });
+
+  it('gives low and not_yours no sub-line', () => {
+    expect(tierSubline(rel({ tier: 'low' }))).toBeNull();
+    expect(tierSubline(rel({ tier: 'not_yours' }))).toBeNull();
+  });
+
+  it('survives a null relevance', () => {
+    expect(tierSubline(null)).toBeNull();
+  });
+
+  // A malformed date must not render as "Invalid Date" in front of a user.
+  it('passes a malformed due date through unchanged', () => {
+    const r = rel({ consequence: {
+      reach: null, impact: null, role: null,
+      urgency: { text: 'x', due: 'not-a-date', from: 'KEV' },
+    } } as Partial<Relevance>);
+    expect(tierSubline(r)).toContain('not-a-date');
+  });
+});
+
+describe('consequence slots', () => {
+  it('states the gap rather than rendering blank', () => {
+    expect(slotText(null)).toBe('not stated in the source data');
+    expect(slotText(undefined)).toBe('not stated in the source data');
+  });
+
+  it('renders the slot text when present', () => {
+    expect(slotText({ text: 'anyone on the internet', from: 'x' })).toBe('anyone on the internet');
+  });
+
+  it('knows when there is nothing to show at all', () => {
+    expect(hasConsequence(rel())).toBe(true);
+    expect(hasConsequence(rel({ consequence: { reach: null, impact: null, role: null, urgency: null } } as Partial<Relevance>))).toBe(false);
+    expect(hasConsequence(rel({ consequence: null } as Partial<Relevance>))).toBe(false);
+    expect(hasConsequence(null)).toBe(false);
   });
 });
