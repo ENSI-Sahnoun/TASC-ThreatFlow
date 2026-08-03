@@ -1,4 +1,4 @@
-import { Component, ElementRef, ViewChild, inject, signal, effect, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ElementRef, ViewChild, inject, signal, effect, DestroyRef, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { map, catchError, of, filter } from 'rxjs';
@@ -9,6 +9,7 @@ import { SyncService } from '../core/sync.service';
 import { CommandPaletteComponent } from './command-palette.component';
 import { ProfileService } from '../core/profile.service';
 import { ProfilePickerComponent } from '../pages/onboarding/profile-picker.component';
+import { healthPoll } from '../core/health-poll';
 
 @Component({
   selector: 'tf-shell',
@@ -54,6 +55,14 @@ import { ProfilePickerComponent } from '../pages/onboarding/profile-picker.compo
           <a routerLink="/arsenal">Review sources</a>
         </p>
       }
+    }
+
+    <!-- Only for the backend being unreachable, not degraded — a slow or erroring API is
+         still answering (the banner above covers that). This is "nothing is answering at all",
+         which today's incident showed can otherwise look like a page loading forever with no
+         explanation. Auto-recovers: see the reload effect in the constructor. -->
+    @if (backendUnreachable()) {
+      <p class="unreachable">Backend unreachable — retrying automatically…</p>
     }
 
     <main><router-outlet /></main>
@@ -129,6 +138,11 @@ import { ProfilePickerComponent } from '../pages/onboarding/profile-picker.compo
       border-bottom: var(--hair) solid var(--hairline);
     }
     .degraded a { color: var(--ink); margin-left: 8px; }
+    .unreachable {
+      margin: 0; padding: 7px 20px; font-size: var(--fs-xs); color: var(--ink-2);
+      background: color-mix(in srgb, var(--sev-critical) 16%, transparent);
+      border-bottom: var(--hair) solid var(--hairline);
+    }
     main { padding: 20px; max-width: 1680px; margin: 0 auto; }
 
     /* Below 640px the brand + nav links + search button no longer fit on one row (that's what
@@ -200,6 +214,12 @@ export class ShellComponent {
     { initialValue: null },
   );
 
+  // 3 consecutive failed checks (~15s), not 1 — a single slow response is not an outage, and
+  // today's own incident (a stuck schema migration) took several seconds to resolve on its own.
+  private healthHandle = healthPoll(() => this.api.health());
+  backendUnreachable = this.healthHandle.unreachable;
+  private wasUnreachable = false;
+
   constructor() {
     this.profiles.load();
     // The gate fires only once the profile list has actually arrived — needsOnboarding() stays
@@ -209,6 +229,14 @@ export class ShellComponent {
         this.router.navigateByUrl('/onboarding');
       }
     });
+    // Reload only on the true -> false transition, never on the initial (already-reachable)
+    // state — otherwise every normal app boot would reload itself once.
+    effect(() => {
+      const down = this.backendUnreachable();
+      if (!down && this.wasUnreachable) window.location.reload();
+      this.wasUnreachable = down;
+    });
+    inject(DestroyRef).onDestroy(() => this.healthHandle.destroy());
   }
 
   @ViewChild('searchBtn') private searchBtn?: ElementRef<HTMLButtonElement>;

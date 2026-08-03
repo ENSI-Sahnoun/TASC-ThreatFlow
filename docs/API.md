@@ -8,6 +8,13 @@ CORS allowlist: `CORS_ORIGIN` env var, default `http://localhost:4200` (Angular 
 
 ---
 
+## Health
+
+`GET /api/health` → `{ ok: true }`. No DB round-trip — confirms only that the process is up and
+accepting connections. Polled by the frontend shell to show a "backend unreachable" banner.
+
+---
+
 ## Sources
 
 ### `GET /api/sources`
@@ -74,12 +81,39 @@ per source. Fetch the collapsed members with `GET /api/clusters/:id/items`.
 Single item, embedded with everything needed for a detail view:
 `cves[]`, `iocs[{type,value}]`, `actors[]`, `families[]`, `domains[]`, `ip_intel{}` (keyed by IP, decoded), `raw` (parsed `raw_json`).
 
+Also carries `clusterId` and `relatedStoryCount`. Both describe the cluster this item is the
+**primary** of: `clusterId` is `null` and `relatedStoryCount` is `0` for any item that is not a
+cluster primary, since `story_links` pairs clusters and a non-primary member is a duplicate of its
+primary rather than a story in its own right.
+
 `404` if not found.
 
 ### `GET /api/clusters/:id/items`
 Every item belonging to cluster `:id` (the primary and every collapsed member), each with
 `item_id`, `title`, `published_at`, `source_id`, `source_name`, `source_status`. `404` if the
 cluster doesn't exist.
+
+### `GET /api/clusters/:id/related`
+Model-suggested links to **different** stories that look related — not other outlets covering the
+same one (that is `/items` above). Returns, best first:
+
+```
+[{ clusterId, title, primaryItemId, similarity, label }]
+```
+
+`label` is `"Likely related"` (`similarity >= 0.9`) or `"Possibly related"`, and is what a UI
+should display: the raw float implies a precision the measurement does not have. Either direction
+of a pair resolves — `story_links` stores one canonical row with `cluster_a_id < cluster_b_id`.
+
+`[]` when nothing is linked, which is the normal case. `404` if the cluster doesn't exist.
+
+These are suggestions and nothing deterministic reads them. They never merge clusters, never feed
+`clusters.source_count`, and therefore cannot affect `confidence`. Links are rebuilt after every
+consolidation (both the manual `sync-all` and the scheduler's minute pass), because
+`rebuildClusters()` regenerates every cluster id and cascade-deletes the previous run's rows.
+Scope is narrow on purpose: only `news`/`osint`/`malware`/`advisory` clusters within the 72h
+clustering window whose title is not a bare identifier. See `server/story_links.js` for the
+measured threshold and `server/story_links_batch.js` for why the scope is what it is.
 
 ---
 

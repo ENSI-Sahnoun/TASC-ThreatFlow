@@ -15,6 +15,8 @@ const { SECTORS, recommendationFor } = require('./sector_profiles');
 const profiles = require('./profiles');
 const { recomputeProfile } = require('./relevance');
 const { generateProse } = require('./relevance_prose');
+const { linkStories } = require('./story_links_batch');
+const { similarityLabel } = require('./story_links');
 
 const CONFIG_BY_NAME = configByName();
 
@@ -74,6 +76,12 @@ function createApp(store) {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
+
+  // No DB round-trip on purpose: the frontend's health poll (shell.component.ts) only needs to
+  // know the process itself is up and accepting connections. A dependency check here would be
+  // redundant anyway — a stuck applySchema()/seedFromConfig() blocks app.listen() from ever
+  // being reached at all, so the whole process (this route included) is unreachable regardless.
+  app.get('/api/health', (req, res) => res.json({ ok: true }));
 
   // Wrap async handlers so a rejected promise becomes a 500 instead of an unhandled
   // rejection that crashes the process.
@@ -289,6 +297,11 @@ function createApp(store) {
     } catch (e) {
       consolidationError = e.message;
     }
+    // Story linking runs after consolidation because it reads the cluster set rebuildClusters()
+    // has just produced. It is deliberately outside the consolidate() transaction chain and its
+    // own try/catch: it is the only part of this route that needs Ollama, and an unreachable
+    // model must cost suggestion links and nothing else.
+    if (consolidation) linkStories(store).catch(() => {});
     // Newly ingested items have no verdict yet. Rescore every profile after consolidation, so
     // the tiers reflect the cve_intel facts this sync just rebuilt rather than the previous ones.
     for (const p of await profiles.listProfiles(store)) recomputeInBackground(p.id);
@@ -462,7 +475,48 @@ function createApp(store) {
     }
     let raw = null;
     if (item.raw_json) { try { raw = JSON.parse(item.raw_json); } catch { raw = null; } }
-    res.json({ ...item, raw, cves, iocs, actors, families, domains, ip_intel: ipIntel });
+
+    // Only a cluster primary can carry related stories: story_links pairs clusters, and a
+    // non-primary member is a duplicate of its primary rather than a story in its own right.
+    // The cluster id travels with the count so the detail page can follow it to
+    // /api/clusters/:id/related without a second lookup.
+    const cluster = await store.get(`
+      SELECT cl.id,
+             (SELECT COUNT(*)::int FROM story_links sl
+               WHERE sl.cluster_a_id = cl.id OR sl.cluster_b_id = cl.id) AS related_count
+        FROM clusters cl
+       WHERE cl.primary_item_id = $1`, [id]);
+
+    res.json({
+      ...item, raw, cves, iocs, actors, families, domains, ip_intel: ipIntel,
+      clusterId: cluster ? cluster.id : null,
+      relatedStoryCount: cluster ? cluster.related_count : 0,
+    });
+  }));
+
+  // Model-derived "possibly related story" suggestions. Separate from /clusters/:id/items,
+  // which returns the other outlets covering the SAME story — these are different stories that
+  // merely look related, and nothing downstream acts on them.
+  app.get('/api/clusters/:id/related', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(404).json({ error: 'not found' });
+    const cluster = await store.get('SELECT id FROM clusters WHERE id = $1', [id]);
+    if (!cluster) return res.status(404).json({ error: 'not found' });
+
+    // Either direction of the pair: story_links stores one canonical row with a < b, so the
+    // other side of the edge has to be selected rather than assumed to be cluster_b_id.
+    const rows = await store.all(`
+      SELECT other.id AS "clusterId", other.title, other.primary_item_id AS "primaryItemId",
+             sl.similarity
+        FROM story_links sl
+        JOIN clusters other
+          ON other.id = CASE WHEN sl.cluster_a_id = $1 THEN sl.cluster_b_id ELSE sl.cluster_a_id END
+       WHERE sl.cluster_a_id = $1 OR sl.cluster_b_id = $1
+       ORDER BY sl.similarity DESC`, [id]);
+
+    // The raw float never leaves the API as the thing to display — it implies a precision the
+    // measurement does not have — but it is kept alongside the label for sorting and debugging.
+    res.json(rows.map((r) => ({ ...r, label: similarityLabel(r.similarity) })));
   }));
 
   app.get('/api/ip-intel/:ip', h(async (req, res) => {

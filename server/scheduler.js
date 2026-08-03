@@ -1,5 +1,6 @@
 const { syncSource, loadKevCveSet } = require('./fetchers');
 const { consolidate } = require('./consolidate');
+const { linkStories } = require('./story_links_batch');
 
 // Sequential sync over many sources at 15-20s timeout each could take minutes; bounded
 // concurrency (mirrors POST /api/sources/sync-all) keeps a scheduled tick fast.
@@ -29,6 +30,21 @@ async function syncMany(store, sources, configByName) {
 // 42 sources tolerate fine (see removed-sources-backup.csv history) — a shared per-tick "still
 // running" guard keeps a slow tick from overlapping the next timer fire rather than piling up
 // concurrent syncs against the same sources.
+// Story links have to be rebuilt on every consolidation, not only after a manual sync-all:
+// rebuildClusters() deletes and reinserts every cluster row, so the previous run's links were
+// cascade-deleted with the ids they referenced. The embeddings themselves are cached against
+// item ids and survive, so a tick that finds no new prose story calls the model zero times.
+//
+// Awaited but never allowed to throw — this is the only part of a scheduled tick that needs
+// Ollama, and an unreachable model must cost suggestion links and nothing else.
+async function linkStoriesQuietly(store) {
+  try {
+    await linkStories(store);
+  } catch (err) {
+    console.error('story linking failed:', err.message);
+  }
+}
+
 function startScheduler(store, configByName) {
   let minuteRunning = false;
   let dailyRunning = false;
@@ -40,6 +56,7 @@ function startScheduler(store, configByName) {
       const sources = await store.all("SELECT * FROM sources WHERE active = true AND fetch_kind != 'vulnetix'");
       await syncMany(store, sources, configByName);
       await consolidate(store);
+      await linkStoriesQuietly(store);
     } catch (err) {
       console.error('scheduled sync failed:', err);
     } finally {
@@ -55,6 +72,7 @@ function startScheduler(store, configByName) {
       if (sources.length) {
         await syncMany(store, sources, configByName);
         await consolidate(store);
+        await linkStoriesQuietly(store);
       }
     } catch (err) {
       console.error('scheduled Vulnetix sync failed:', err);

@@ -220,6 +220,40 @@ async function applySchema(s = store) {
       UNIQUE(item_id)
     );
 
+    -- Embedding cache for semantic story linking. Keyed on item_id, NOT cluster id, because
+    -- rebuildClusters() does a full DELETE + reinsert on every consolidation: cluster ids are
+    -- regenerated each run, so an embedding stored against one would be discarded every sync and
+    -- re-paid for on the next. Item ids are stable, so this cache survives.
+    --
+    -- \`model\` is not decoration. Embeddings from different models are not comparable — they have
+    -- different dimensionality (mxbai-embed-large is 1024, nomic-embed-text is 768) and different
+    -- geometry even at equal size — so the batch job only ever compares vectors sharing a model.
+    CREATE TABLE IF NOT EXISTS item_embeddings (
+      item_id     INT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      embedding   DOUBLE PRECISION[] NOT NULL,
+      model       TEXT NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Model-derived "possibly related story" edges. Deliberately NOT part of clusters/
+    -- cluster_items: applyConfidence() derives an item's corroboration bonus from
+    -- clusters.source_count, so a wrong similarity edge here can never inflate confidence. It
+    -- can only add a suggestion link in the UI.
+    --
+    -- cluster_a_id < cluster_b_id gives one canonical row per pair, enforced rather than
+    -- convention, so no reverse-duplicate can be inserted.
+    CREATE TABLE IF NOT EXISTS story_links (
+      cluster_a_id INT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+      cluster_b_id INT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+      similarity   DOUBLE PRECISION NOT NULL,
+      model        TEXT NOT NULL,
+      computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (cluster_a_id < cluster_b_id),
+      UNIQUE(cluster_a_id, cluster_b_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_story_links_a ON story_links(cluster_a_id);
+    CREATE INDEX IF NOT EXISTS idx_story_links_b ON story_links(cluster_b_id);
+
     CREATE TABLE IF NOT EXISTS source_syncs (
       id          INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       source_id   INT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,

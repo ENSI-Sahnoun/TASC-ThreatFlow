@@ -5,7 +5,7 @@ import { toQueryParams, type IntelFilters } from './filters';
 import type {
   DashboardStats, FeedRow, Source, SourceStats, Item, ItemDetail,
   CveIntel, CveDetail, EntityProfile, SearchResults, Facets, ClusterMember, IocRow, IocCheckResult,
-  PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet, DomainOption,
+  PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet, DomainOption, RelatedStory,
 } from './models';
 
 // One method per endpoint and nothing else. No caching, no state — stores own that.
@@ -15,6 +15,10 @@ export class ApiService {
 
   dashboard(): Observable<DashboardStats> {
     return this.http.get<DashboardStats>('/api/stats/dashboard');
+  }
+
+  health(): Observable<{ ok: boolean }> {
+    return this.http.get<{ ok: boolean }>('/api/health');
   }
 
   feed(since?: string, limit = 50): Observable<FeedRow[]> {
@@ -35,6 +39,10 @@ export class ApiService {
 
   clusterItems(clusterId: number): Observable<ClusterMember[]> {
     return this.http.get<ClusterMember[]>(`/api/clusters/${clusterId}/items`);
+  }
+
+  relatedStories(clusterId: number): Observable<RelatedStory[]> {
+    return this.http.get<RelatedStory[]>(`/api/clusters/${clusterId}/related`);
   }
 
   sources(): Observable<Source[]> {
