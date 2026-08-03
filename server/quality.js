@@ -26,6 +26,27 @@
 // the eight cases it was designed against and 4/11 on held-out data — worse than this prompt,
 // and barely above the 25% four-class chance line. The bias did not disappear, it moved from
 // "always intel" to "always roundup". Measure any change on headlines you did not tune against.
+//
+// SELF-CONSISTENCY VOTING — MEASURED, NOT SHIPPED AS THE DEFAULT (2026-08-03,
+// server/quality.eval.json's 30-item holdout split, a persisted set unlike the untracked 11
+// above — see server/quality.eval.js to re-measure).
+//
+// Single-shot baseline (shots: 1, temperature 0.2): 19/30, 0 conservative failures (no real
+// intel demoted). 5-shot majority vote (shots: 5, temperature 0.7 per shot, ties resolve to
+// intel): also 19/30, 0 conservative failures — an EXACT tie, same confusion matrix, same items
+// right and wrong. Voting did not help.
+//
+// Why: a direct check (5 calls at temperature 0.7 on a borderline held-out headline) returned
+// the same verdict all 5 times. This model's JSON-schema-constrained, four-way classification
+// output is too peaked to disagree with itself even at raised temperature — there is no
+// diversity for a vote to aggregate over. Self-consistency only helps when a model's answers
+// actually vary across samples; this one's don't, on this task.
+//
+// The `shots`/`voteTemperature` mechanism stays in `classifyQuality` (tested, and reused by
+// `quality.eval.js`) but defaults back to `shots: 1, voteTemperature: 0.2` — exactly the
+// pre-voting behavior — because a feature that measures no better than what it replaced doesn't
+// get to be the default. Re-measure with `shots: 5` if the model changes; don't assume a bigger
+// or different model inherits this result.
 const { judgeText, DEFAULT_MODEL } = require('./lm_client');
 
 const VERDICTS = ['intel', 'roundup', 'commentary', 'promotion'];
@@ -74,9 +95,11 @@ function buildPrompt(item) {
   ].join('\n');
 }
 
+// shots/voteTemperature default to the pre-voting single-shot behavior — see the
+// SELF-CONSISTENCY VOTING comment above for why 5-shot voting isn't the default.
 async function classifyQuality(store, {
   judge = judgeText, model = DEFAULT_MODEL, concurrency = CONCURRENCY, limit = null,
-  shots = 5, voteTemperature = 0.7,
+  shots = 1, voteTemperature = 0.2,
 } = {}) {
   const pending = await store.all(
     `SELECT i.id, i.title, i.summary
