@@ -106,6 +106,37 @@ export function hasConsequence(relevance: Relevance | null | undefined): boolean
   return !!c && !!(c.reach || c.impact || c.role || c.urgency);
 }
 
+export interface ImpactBlock {
+  label: string;
+  text: string;
+  from: string | null;
+  /** True when the source data did not supply this fact, so the UI can style it as a gap. */
+  missing: boolean;
+}
+
+// The four blocks the impact panel renders, in reading order: who, what, what it is, how soon.
+// Built here rather than in the template so the whole spec of the panel is testable without a
+// DOM — this app runs vitest in a node environment with no TestBed by design, so components
+// stay thin bindings over pure functions like this one.
+//
+// Every block is always present. A missing fact renders as a stated gap, because blank space
+// would read as "nothing to worry about", which is not what a null slot means.
+export function impactBlocks(relevance: Relevance | null | undefined): ImpactBlock[] {
+  const c = relevance?.consequence;
+  const block = (label: string, slot: ConsequenceSlot | null | undefined): ImpactBlock => ({
+    label,
+    text: slotText(slot),
+    from: slot?.from ?? null,
+    missing: !slot,
+  });
+  return [
+    block('Who could do it', c?.reach),
+    block('What they could do', c?.impact),
+    block('What that is', c?.role),
+    block('How urgent', c?.urgency),
+  ];
+}
+
 export function relevanceTier(relevance: Relevance | null | undefined): string | null {
   return relevance?.tier ?? null;
 }

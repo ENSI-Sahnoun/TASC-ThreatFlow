@@ -139,7 +139,7 @@ describe('quality badge', () => {
 
 // --- Impact indicator (Spec A) ---
 
-import { tierSubline, slotText, hasConsequence } from './relevance';
+import { tierSubline, slotText, hasConsequence, impactBlocks } from './relevance';
 import type { Relevance } from './models';
 
 const rel = (over: Partial<Relevance> = {}): Relevance => ({
@@ -214,5 +214,36 @@ describe('consequence slots', () => {
     expect(hasConsequence(rel({ consequence: { reach: null, impact: null, role: null, urgency: null } } as Partial<Relevance>))).toBe(false);
     expect(hasConsequence(rel({ consequence: null } as Partial<Relevance>))).toBe(false);
     expect(hasConsequence(null)).toBe(false);
+  });
+});
+
+describe('impact blocks', () => {
+  it('always renders four blocks in reading order', () => {
+    const labels = impactBlocks(rel()).map((b) => b.label);
+    expect(labels).toEqual(['Who could do it', 'What they could do', 'What that is', 'How urgent']);
+  });
+
+  it('marks a missing fact rather than dropping the block', () => {
+    const blocks = impactBlocks(rel());
+    const impact = blocks.find((b) => b.label === 'What they could do')!;
+    expect(impact.missing).toBe(true);
+    expect(impact.text).toBe('not stated in the source data');
+    expect(impact.from).toBeNull();
+  });
+
+  it('carries the provenance of a present fact', () => {
+    const reach = impactBlocks(rel()).find((b) => b.label === 'Who could do it')!;
+    expect(reach.missing).toBe(false);
+    expect(reach.from).toBe('AV:N/PR:N/UI:N + exposure=internet');
+  });
+
+  it('renders four gaps rather than throwing when there is no consequence', () => {
+    const blocks = impactBlocks(rel({ consequence: null } as Partial<Relevance>));
+    expect(blocks).toHaveLength(4);
+    expect(blocks.every((b) => b.missing)).toBe(true);
+  });
+
+  it('renders four gaps for a null relevance', () => {
+    expect(impactBlocks(null).every((b) => b.missing)).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
-import { tierLabel, tierToken, tierIsProminent, explanation } from '../core/relevance';
+import { tierLabel, tierToken, tierIsProminent, tierSubline, explanation } from '../core/relevance';
 import type { Relevance } from '../core/models';
 
 // The "Possible Threat" indicator. Sits beside the severity chip and answers a different
@@ -19,7 +19,7 @@ import type { Relevance } from '../core/models';
         [class.quiet]="!prominent"
         [style.--c]="color"
         [title]="sentence"
-      >{{ label }}</span>
+      >{{ label }}@if (subline) {<span class="sub"> · {{ subline }}</span>}</span>
     }
   `,
   styles: [`
@@ -32,6 +32,9 @@ import type { Relevance } from '../core/models';
     /* low / not_yours stay legible and stay in the list — they just do not compete for
        attention with the tiers that need action. */
     .quiet { background: transparent; color: var(--ink-2); border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); }
+    /* The deadline rides along at lower weight — present while scanning, never competing with
+       the tier itself. */
+    .sub { font-weight: 400; opacity: 0.75; }
   `],
 })
 export class RelevanceChipComponent {
@@ -40,5 +43,6 @@ export class RelevanceChipComponent {
   get label() { return tierLabel(this.relevance?.tier); }
   get color() { return tierToken(this.relevance?.tier); }
   get prominent() { return tierIsProminent(this.relevance?.tier); }
+  get subline() { return tierSubline(this.relevance); }
   get sentence() { return explanation(this.relevance); }
 }
