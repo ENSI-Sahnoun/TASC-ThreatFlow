@@ -12,11 +12,11 @@ if ! docker ps --filter name=threatflow-pg16 --filter status=running -q | grep -
 fi
 
 echo "starting API on :4173..."
-"$NODE" "$ROOT/server/index.js" > /tmp/threatflow-api.log 2>&1 &
+setsid "$NODE" "$ROOT/server/index.js" > /tmp/threatflow-api.log 2>&1 < /dev/null &
 API_PID=$!
 
 echo "starting frontend on :4400..."
-(cd "$ROOT/frontend-v4" && "$NPM" start > /tmp/threatflow-frontend.log 2>&1) &
+(cd "$ROOT/frontend-v4" && setsid "$NPM" start > /tmp/threatflow-frontend.log 2>&1 < /dev/null) &
 FRONTEND_PID=$!
 
 echo "API pid $API_PID (log: /tmp/threatflow-api.log)"

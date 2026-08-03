@@ -17,6 +17,10 @@ export class ApiService {
     return this.http.get<DashboardStats>('/api/stats/dashboard');
   }
 
+  health(): Observable<{ ok: boolean }> {
+    return this.http.get<{ ok: boolean }>('/api/health');
+  }
+
   feed(since?: string, limit = 50): Observable<FeedRow[]> {
     let params = new HttpParams().set('limit', limit);
     if (since) params = params.set('since', since);
