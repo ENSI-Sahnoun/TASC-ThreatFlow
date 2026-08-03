@@ -38,6 +38,17 @@ const CONCURRENCY = 2;
 
 const SCHEMA = { verdict: { type: 'string', enum: VERDICTS } };
 
+// Majority wins; a tie for the top spot (including 1-1-1 or an empty field) resolves to
+// `intel` — the conservative default, since an unsure vote should not bury real intelligence.
+function pickVerdict(verdicts) {
+  if (!verdicts.length) return null;
+  const tally = {};
+  for (const v of verdicts) tally[v] = (tally[v] || 0) + 1;
+  const max = Math.max(...Object.values(tally));
+  const leaders = Object.keys(tally).filter((v) => tally[v] === max);
+  return leaders.length === 1 ? leaders[0] : 'intel';
+}
+
 // Categories are described by example rather than defined abstractly: small models classify far
 // more reliably against concrete instances than against definitions.
 function buildPrompt(item) {
@@ -103,4 +114,4 @@ async function classifyQuality(store, { judge = judgeText, model = DEFAULT_MODEL
   return { considered: pending.length, written, failed, counts };
 }
 
-module.exports = { classifyQuality, buildPrompt, VERDICTS, CLASSIFIED_CATEGORIES };
+module.exports = { classifyQuality, buildPrompt, pickVerdict, VERDICTS, CLASSIFIED_CATEGORIES };

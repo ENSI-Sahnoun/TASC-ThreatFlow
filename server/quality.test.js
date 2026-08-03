@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { makeTempDb } = require('./test-helpers');
-const { classifyQuality, buildPrompt, VERDICTS, CLASSIFIED_CATEGORIES } = require('./quality');
+const { classifyQuality, buildPrompt, pickVerdict, VERDICTS, CLASSIFIED_CATEGORIES } = require('./quality');
 
 async function seed(store) {
   const src = await store.get(
@@ -43,6 +43,32 @@ test('buildPrompt gives concrete examples, not abstract definitions', () => {
 test('buildPrompt includes the summary when the item has one', () => {
   assert.match(buildPrompt({ title: 'T', summary: 'A detailed description.' }), /A detailed description/);
   assert.ok(!/Summary:/.test(buildPrompt({ title: 'T' })));
+});
+
+test('pickVerdict: clear majority wins', () => {
+  assert.strictEqual(pickVerdict(['intel', 'intel', 'intel', 'commentary', 'commentary']), 'intel');
+});
+
+test('pickVerdict: a lone valid vote wins outright', () => {
+  assert.strictEqual(pickVerdict(['promotion']), 'promotion');
+});
+
+test('pickVerdict: a 2-2-1 tie for the top spot resolves to intel', () => {
+  assert.strictEqual(pickVerdict(['roundup', 'roundup', 'commentary', 'commentary', 'promotion']), 'intel');
+});
+
+test('pickVerdict: a 1-1-1 tie resolves to intel', () => {
+  assert.strictEqual(pickVerdict(['roundup', 'commentary', 'promotion']), 'intel');
+});
+
+test('pickVerdict: no valid votes returns null', () => {
+  assert.strictEqual(pickVerdict([]), null);
+});
+
+test('pickVerdict: a plain majority of intel votes among survivors still wins after some failed', () => {
+  // caller has already dropped the nulls before calling pickVerdict — this models 2 survivors
+  // agreeing out of an original 5-shot batch where 3 failed
+  assert.strictEqual(pickVerdict(['intel', 'intel']), 'intel');
 });
 
 test('classifyQuality writes a verdict per news item and skips other categories', async () => {
