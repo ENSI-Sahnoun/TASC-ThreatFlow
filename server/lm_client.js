@@ -17,6 +17,13 @@ const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
 // headlines quoted verbatim in its own prompt as counter-examples. Anything smaller than ~7B
 // should be re-verified against server/quality.js before being trusted, not assumed to work.
 const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'mistral:7b-instruct-q3_K_S';
+// Mixedbread AI (Berlin) mxbai-embed-large, 334M params, 1024 dimensions.
+//
+// A purpose-trained embedding model, not a generative one — `mistral:7b-instruct` has no
+// embedding capability in Ollama, and Mistral's own `mistral-embed` is a cloud API with no local
+// weights, which would mean shipping item text to a third party for what is meant to be a
+// local-only feature.
+const DEFAULT_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'mxbai-embed-large';
 const DEFAULT_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 20000;
 
 function buildRequest(prompt, { model = DEFAULT_MODEL, temperature = 0.2 } = {}) {
@@ -142,4 +149,79 @@ async function judgeText(prompt, {
   return null;
 }
 
-module.exports = { judgeText, buildRequest, parseReply, DEFAULT_MODEL, OLLAMA_HOST };
+// A vector is only usable if every component is a finite number and at least one is non-zero.
+// An all-zero vector is the dangerous case: cosine similarity divides by its magnitude, so it
+// would either throw or — worse — silently produce NaN that compares false against every
+// threshold, making a broken embedding look like "nothing is related".
+function parseEmbedding(body) {
+  if (typeof body !== 'string' || !body) return null;
+  let envelope;
+  try { envelope = JSON.parse(body); } catch { return null; }
+  if (!envelope || typeof envelope !== 'object') return null;
+
+  // /api/embed returns { embeddings: [[...]] } for a batch of one; the older /api/embeddings
+  // returned { embedding: [...] }. Accept either so the client is not pinned to one Ollama
+  // version, and reject anything that is not one of those two shapes.
+  const raw = Array.isArray(envelope.embedding)
+    ? envelope.embedding
+    : (Array.isArray(envelope.embeddings) ? envelope.embeddings[0] : null);
+
+  if (!Array.isArray(raw) || !raw.length) return null;
+  if (!raw.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+  if (raw.every((v) => v === 0)) return null;
+  return raw;
+}
+
+async function postEmbedOnce(text, { model, timeoutMs, request }) {
+  const payload = { model, input: text };
+  if (request) return request(`${OLLAMA_HOST}/api/embed`, { method: 'POST', body: JSON.stringify(payload), timeoutMs });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    return { status: res.status, body: await res.text() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Embed a single text. Resolves to `number[]`, or `null` on any failure whatsoever —
+ * the caller writes nothing and retries on the next pass.
+ */
+async function embed(text, {
+  model = DEFAULT_EMBED_MODEL,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retries = 1,
+  request,
+} = {}) {
+  const input = typeof text === 'string' ? text.trim() : '';
+  // Embedding the empty string returns a vector that is mathematically valid and semantically
+  // meaningless — it would sit at some fixed point every other empty item also lands on, and
+  // link them all to each other at similarity 1.0.
+  if (!input) return null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let res;
+    try {
+      res = await postEmbedOnce(input, { model, timeoutMs, request });
+    } catch {
+      continue;   // transport fault — worth one retry
+    }
+    if (!res || typeof res.status !== 'number' || res.status < 200 || res.status >= 300) continue;
+    return parseEmbedding(res.body);
+  }
+  return null;
+}
+
+module.exports = {
+  judgeText, buildRequest, parseReply,
+  embed, parseEmbedding,
+  DEFAULT_MODEL, DEFAULT_EMBED_MODEL, OLLAMA_HOST,
+};

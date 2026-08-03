@@ -111,6 +111,21 @@ export interface ItemDetail extends Item {
   domains: string[];
   ip_intel: Record<string, IpIntelEntry>;
   raw: unknown;
+  // Null unless this item is a cluster's primary — only a primary can carry related stories,
+  // since story_links pairs clusters and a non-primary member is a duplicate of its primary.
+  clusterId: number | null;
+  relatedStoryCount: number;
+}
+
+// A model-suggested link to a DIFFERENT story that looks related — not another outlet covering
+// the same one (that is ClusterMember). Nothing deterministic reads these: they are suggestions,
+// and `label` is what the UI shows, never the raw similarity.
+export interface RelatedStory {
+  clusterId: number;
+  title: string;
+  primaryItemId: number;
+  similarity: number;
+  label: string;
 }
 
 // Row shape from GET /api/export/iocs?format=json — same fields the CSV variant emits, backing

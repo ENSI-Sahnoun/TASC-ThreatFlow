@@ -12,7 +12,7 @@ import { CopyButtonComponent } from '../../ui/copy-button.component';
 import { BrowserWindowComponent } from '../../ui/browser-window.component';
 import { RecordCardComponent } from '../../ui/record-card.component';
 import { relativeTime, stripHtml } from '../../core/format';
-import type { ItemDetail } from '../../core/models';
+import type { ItemDetail, RelatedStory } from '../../core/models';
 
 interface EntityLink { key: string; label: string; path: string[]; }
 
@@ -132,6 +132,19 @@ interface EntityLink { key: string; label: string; path: string[]; }
         }
       </tf-panel>
 
+      @if (related().length > 0) {
+        <tf-panel title="Possibly related" subtitle="suggested by a local model — not corroboration">
+          <ul class="related">
+            @for (r of related(); track r.clusterId) {
+              <li>
+                <a [routerLink]="['/intel', r.primaryItemId]">{{ r.title }}</a>
+                <span class="rel-label">{{ r.label }}</span>
+              </li>
+            }
+          </ul>
+        </tf-panel>
+      }
+
       <details class="raw">
         <summary>Raw JSON</summary>
         <pre>{{ rawJsonText() }}</pre>
@@ -200,6 +213,21 @@ interface EntityLink { key: string; label: string; path: string[]; }
     a.entity:active { background: var(--surface-4); transform: scale(.95); }
     .entity.tag { color: var(--ink-2); cursor: default; }
 
+    /* Deliberately quieter than the entity chips above: these are model suggestions, and they
+       must not read with the same authority as extracted, source-derived data. */
+    ul.related { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    ul.related li { display: flex; align-items: baseline; gap: 10px; }
+    ul.related a {
+      font-size: var(--fs-sm); color: var(--ink); text-decoration: none;
+      transition: color var(--dur-fast) var(--ease-out);
+    }
+    ul.related a:hover { color: var(--accent); text-decoration: underline; }
+    ul.related a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+    .rel-label {
+      flex: none; margin-left: auto; font-size: var(--fs-xs); color: var(--ink-2);
+      background: var(--surface-2); padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    }
+
     .tf-scroll { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
     thead th, tbody td { border-bottom: var(--hair) solid var(--hairline); }
@@ -257,7 +285,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
     .err button:active { opacity: .74; }
 
     @media (prefers-reduced-motion: reduce) {
-      .back, .entity, .expand, .err button { transition: none; }
+      .back, .entity, .expand, .err button, ul.related a { transition: none; }
       .header, tbody tr, dl.ip-meta { animation: none; }
     }
   `],
@@ -274,6 +302,7 @@ export class ItemDetailComponent {
   error = signal(false);
   sourceStatus = signal<string | null>(null);
   sourceFetchKind = signal<string | null>(null);
+  related = signal<RelatedStory[]>([]);
   private expandedIps = signal<Set<string>>(new Set());
 
   relativeTime = relativeTime;
@@ -305,6 +334,7 @@ export class ItemDetailComponent {
       this.detail.set(null);
       this.sourceStatus.set(null);
       this.sourceFetchKind.set(null);
+      this.related.set([]);
       this.expandedIps.set(new Set());
       this.loadDetail();
     });
@@ -319,6 +349,10 @@ export class ItemDetailComponent {
         this.detail.set(d);
         this.loading.set(false);
         this.loadSourceStatus(d.source_id);
+        // The count is on the detail payload, so a second request only happens when there is
+        // something to fetch. No panel is rendered when there are no links — an empty-state
+        // placeholder would advertise a feature that has nothing to say about this item.
+        if (d.clusterId != null && d.relatedStoryCount > 0) this.loadRelated(d.clusterId);
       },
       error: (err: HttpErrorResponse) => {
         this.loading.set(false);
@@ -344,6 +378,15 @@ export class ItemDetailComponent {
     const next = new Set(this.expandedIps());
     if (next.has(value)) next.delete(value); else next.add(value);
     this.expandedIps.set(next);
+  }
+
+  // Suggestions are the lowest-stakes thing on the page: a failure leaves the panel unrendered
+  // rather than showing an error, exactly as if the model had never linked anything.
+  private loadRelated(clusterId: number): void {
+    this.api.relatedStories(clusterId).subscribe({
+      next: (rows) => this.related.set(rows),
+      error: () => { /* no panel — a suggestion that cannot load is not worth reporting */ },
+    });
   }
 
   // Source health for the item's dot isn't part of GET /api/items/:id (only name/tier/url are

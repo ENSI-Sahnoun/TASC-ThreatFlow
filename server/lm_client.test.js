@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { judgeText, buildRequest, parseReply } = require('./lm_client');
+const { judgeText, buildRequest, parseReply, embed, parseEmbedding } = require('./lm_client');
 
 const SCHEMA = {
   sentence: { type: 'string', maxLength: 200 },
@@ -128,4 +128,85 @@ test('enum matching is case-insensitive and returns the canonical spelling', () 
   assert.deepStrictEqual(parseReply(JSON.stringify({ response: '{"sector":"Finance"}' }), schema), { sector: 'finance' });
   assert.deepStrictEqual(parseReply(JSON.stringify({ response: '{"sector":"Technology-SaaS"}' }), schema), { sector: 'technology-saas' });
   assert.strictEqual(parseReply(JSON.stringify({ response: '{"sector":"banking"}' }), schema), null);
+});
+
+// --- embed -----------------------------------------------------------------
+
+test('parseEmbedding accepts both Ollama response shapes', () => {
+  assert.deepStrictEqual(parseEmbedding(JSON.stringify({ embeddings: [[0.1, -0.2, 0.3]] })), [0.1, -0.2, 0.3]);
+  assert.deepStrictEqual(parseEmbedding(JSON.stringify({ embedding: [0.4, 0.5] })), [0.4, 0.5]);
+});
+
+// An all-zero vector is worse than no vector: cosine similarity divides by its magnitude and
+// yields NaN, which compares false against every threshold and reads as "nothing is related".
+test('parseEmbedding rejects unusable vectors rather than passing them on', () => {
+  const cases = [
+    JSON.stringify({ embeddings: [[0, 0, 0]] }),        // all zero
+    JSON.stringify({ embedding: [0.1, null, 0.3] }),    // non-numeric component
+    JSON.stringify({ embedding: [0.1, 'x'] }),
+    JSON.stringify({ embedding: [0.1, NaN] }),          // serialises to null, still rejected
+    JSON.stringify({ embedding: [] }),                  // empty
+    JSON.stringify({ embeddings: [] }),
+    JSON.stringify({ other: [1, 2, 3] }),               // wrong key
+    JSON.stringify({ embedding: 'not an array' }),
+    'not json',
+    '',
+  ];
+  for (const body of cases) {
+    assert.strictEqual(parseEmbedding(body), null, `expected null for: ${String(body).slice(0, 40)}`);
+  }
+});
+
+test('embed returns the vector on a good reply', async () => {
+  const request = async () => ({ status: 200, body: JSON.stringify({ embeddings: [[1, 2, 3]] }) });
+  assert.deepStrictEqual(await embed('some text', { request }), [1, 2, 3]);
+});
+
+test('embed sends the text as input and pins the model', async () => {
+  let seen = null;
+  const request = async (url, opts) => { seen = { url, body: JSON.parse(opts.body) }; return { status: 200, body: JSON.stringify({ embeddings: [[1]] }) }; };
+  await embed('  cluster title  ', { model: 'test-embed', request });
+  assert.match(seen.url, /\/api\/embed$/);
+  assert.strictEqual(seen.body.model, 'test-embed');
+  assert.strictEqual(seen.body.input, 'cluster title');
+});
+
+// Every empty item would otherwise land on the same fixed point and link to every other one
+// at similarity 1.0.
+test('embed refuses empty input without calling the model', async () => {
+  let calls = 0;
+  const request = async () => { calls += 1; return { status: 200, body: JSON.stringify({ embeddings: [[1]] }) }; };
+  for (const input of ['', '   ', null, undefined, 42]) {
+    assert.strictEqual(await embed(input, { request }), null);
+  }
+  assert.strictEqual(calls, 0);
+});
+
+test('embed returns null on unreachable, non-2xx and malformed replies', async () => {
+  const cases = [
+    async () => { throw new Error('connect ECONNREFUSED'); },
+    async () => ({ status: 500, body: 'boom' }),
+    async () => ({ status: 200, body: 'garbage' }),
+    async () => ({ status: 200, body: null }),
+    async () => null,
+  ];
+  for (const request of cases) {
+    assert.strictEqual(await embed('text', { request, retries: 0 }), null);
+  }
+});
+
+test('embed retries a transport fault once, then gives up', async () => {
+  let calls = 0;
+  const request = async () => { calls += 1; throw new Error('timeout'); };
+  assert.strictEqual(await embed('text', { request }), null);
+  assert.strictEqual(calls, 2);
+});
+
+// Same rule as judgeText: a well-formed HTTP reply that fails validation is the model's answer,
+// not a transient fault, so it is not retried.
+test('embed does not retry a well-formed but invalid vector', async () => {
+  let calls = 0;
+  const request = async () => { calls += 1; return { status: 200, body: JSON.stringify({ embeddings: [[0, 0]] }) }; };
+  assert.strictEqual(await embed('text', { request }), null);
+  assert.strictEqual(calls, 1);
 });

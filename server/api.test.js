@@ -545,3 +545,99 @@ test('quality demotion never outranks a relevance tier', async () => {
     assert.strictEqual(res.body[0].id, urgent.id, 'act_now leads despite the promotion verdict');
   } finally { await cleanup(); }
 });
+
+// --- story links ------------------------------------------------------------
+
+async function seedLinkedClusters(store) {
+  const sid = (await store.get("INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id")).id;
+  const mk = async (title) => {
+    const item = await store.get(
+      "INSERT INTO items (source_id, category, title) VALUES ($1,'news',$2) RETURNING id", [sid, title]);
+    const cluster = await store.get(
+      'INSERT INTO clusters (primary_item_id, title, first_seen, source_count) VALUES ($1,$2,now(),1) RETURNING id',
+      [item.id, title]);
+    return { itemId: item.id, clusterId: cluster.id };
+  };
+  const a = await mk('Minnesota water systems attacked');
+  const b = await mk('CISA warns on water system attacks');
+  const [lo, hi] = [Math.min(a.clusterId, b.clusterId), Math.max(a.clusterId, b.clusterId)];
+  await store.run(
+    "INSERT INTO story_links (cluster_a_id, cluster_b_id, similarity, model) VALUES ($1,$2,0.93,'m')", [lo, hi]);
+  return { a, b };
+}
+
+test('GET /api/clusters/:id/related returns the pair from either direction', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { a, b } = await seedLinkedClusters(store);
+    const app = createApp(store);
+
+    const fromA = await get(app, `/api/clusters/${a.clusterId}/related`);
+    assert.strictEqual(fromA.status, 200);
+    assert.strictEqual(fromA.body.length, 1);
+    assert.strictEqual(fromA.body[0].clusterId, b.clusterId);
+    assert.strictEqual(fromA.body[0].primaryItemId, b.itemId);
+    assert.strictEqual(fromA.body[0].label, 'Likely related');
+
+    // The canonical row is stored once with a < b; the other side must still resolve.
+    const fromB = await get(app, `/api/clusters/${b.clusterId}/related`);
+    assert.strictEqual(fromB.body.length, 1);
+    assert.strictEqual(fromB.body[0].clusterId, a.clusterId);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/clusters/:id/related is an empty array when nothing is linked', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const sid = (await store.get("INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id")).id;
+    const item = await store.get("INSERT INTO items (source_id, category, title) VALUES ($1,'news','lonely') RETURNING id", [sid]);
+    const cluster = await store.get(
+      'INSERT INTO clusters (primary_item_id, title, first_seen, source_count) VALUES ($1,$2,now(),1) RETURNING id',
+      [item.id, 'lonely']);
+    const res = await get(createApp(store), `/api/clusters/${cluster.id}/related`);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body, []);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/clusters/:id/related 404s for unknown and non-integer ids', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    assert.strictEqual((await get(app, '/api/clusters/999999/related')).status, 404);
+    assert.strictEqual((await get(app, '/api/clusters/abc/related')).status, 404);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id carries relatedStoryCount for a cluster primary', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { a } = await seedLinkedClusters(store);
+    const app = createApp(store);
+    const res = await get(app, `/api/items/${a.itemId}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.relatedStoryCount, 1);
+  } finally { await cleanup(); }
+});
+
+// Only a cluster primary can carry related stories — a non-primary member is a duplicate of
+// its primary, not a story of its own.
+test('GET /api/items/:id reports relatedStoryCount 0 for a non-primary item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedLinkedClusters(store);
+    const sid = (await store.get("INSERT INTO sources (name, fetch_kind, active) VALUES ('S2','rss',true) RETURNING id")).id;
+    const other = await store.get("INSERT INTO items (source_id, category, title) VALUES ($1,'news','a member') RETURNING id", [sid]);
+    const res = await get(createApp(store), `/api/items/${other.id}`);
+    assert.strictEqual(res.body.relatedStoryCount, 0);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/health responds ok', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await get(createApp(store), '/api/health');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body, { ok: true });
+  } finally { await cleanup(); }
+});
