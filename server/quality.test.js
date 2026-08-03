@@ -75,7 +75,7 @@ test('classifyQuality writes a verdict per news item and skips other categories'
   const { store, cleanup } = await makeTempDb();
   try {
     const { cveId, phishId } = await seed(store);
-    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'commentary' }]) });
+    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'commentary' }]), shots: 1 });
 
     assert.strictEqual(res.considered, 2, 'only the two news rows');
     assert.strictEqual(res.written, 2);
@@ -89,7 +89,7 @@ test('classifyQuality reports a breakdown by verdict', async () => {
   const { store, cleanup } = await makeTempDb();
   try {
     await seed(store);
-    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'commentary' }]) });
+    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'commentary' }]), shots: 1 });
     assert.strictEqual(res.counts.intel, 1);
     assert.strictEqual(res.counts.commentary, 1);
     assert.strictEqual(res.counts.roundup, 0);
@@ -101,12 +101,12 @@ test('a failed judgement writes nothing and is retried next run', async () => {
   const { store, cleanup } = await makeTempDb();
   try {
     await seed(store);
-    const first = await classifyQuality(store, { judge: fakeJudge([null, null]) });
+    const first = await classifyQuality(store, { judge: fakeJudge([null, null]), shots: 1 });
     assert.strictEqual(first.written, 0);
     assert.strictEqual(first.failed, 2);
     assert.strictEqual((await store.all('SELECT 1 FROM item_quality')).length, 0);
 
-    const second = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'roundup' }]) });
+    const second = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'roundup' }]), shots: 1 });
     assert.strictEqual(second.written, 2, 'the failed items came back around');
   } finally { await cleanup(); }
 });
@@ -115,8 +115,8 @@ test('classifyQuality does not re-classify an item it already judged', async () 
   const { store, cleanup } = await makeTempDb();
   try {
     await seed(store);
-    await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'intel' }]) });
-    const second = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'promotion' }]) });
+    await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }, { verdict: 'intel' }]), shots: 1 });
+    const second = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'promotion' }]), shots: 1 });
     assert.strictEqual(second.considered, 0);
     assert.strictEqual(second.written, 0);
   } finally { await cleanup(); }
@@ -128,7 +128,7 @@ test('classification never deletes or alters the item itself', async () => {
   try {
     await seed(store);
     const before = await store.all('SELECT id, title, category, severity FROM items ORDER BY id');
-    await classifyQuality(store, { judge: fakeJudge([{ verdict: 'promotion' }, { verdict: 'promotion' }]) });
+    await classifyQuality(store, { judge: fakeJudge([{ verdict: 'promotion' }, { verdict: 'promotion' }]), shots: 1 });
     const after = await store.all('SELECT id, title, category, severity FROM items ORDER BY id');
     assert.deepStrictEqual(after, before);
   } finally { await cleanup(); }
@@ -138,7 +138,86 @@ test('classifyQuality honours a limit so a batch can be capped', async () => {
   const { store, cleanup } = await makeTempDb();
   try {
     await seed(store);
-    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }]), limit: 1 });
+    const res = await classifyQuality(store, { judge: fakeJudge([{ verdict: 'intel' }]), limit: 1, shots: 1 });
     assert.strictEqual(res.considered, 1);
+  } finally { await cleanup(); }
+});
+
+test('classifyQuality with shots > 1 takes a majority vote per item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id");
+    const itemId = (await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Some headline','x', now()) RETURNING id`, [src.id])).id;
+
+    // 3 votes for intel, 2 for commentary — intel should win.
+    const judge = fakeJudge([
+      { verdict: 'intel' }, { verdict: 'intel' }, { verdict: 'commentary' },
+      { verdict: 'intel' }, { verdict: 'commentary' },
+    ]);
+    const res = await classifyQuality(store, { judge, shots: 5 });
+
+    assert.strictEqual(res.written, 1);
+    const row = await store.get('SELECT verdict FROM item_quality WHERE item_id = $1', [itemId]);
+    assert.strictEqual(row.verdict, 'intel');
+  } finally { await cleanup(); }
+});
+
+test('classifyQuality: an item fails as a whole only when every shot fails', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Some headline','x', now())`, [src.id]);
+
+    // 2 real answers survive, 3 shots fail — should still write a verdict from the 2 survivors.
+    const judge = fakeJudge([
+      { verdict: 'promotion' }, null, { verdict: 'promotion' }, null, null,
+    ]);
+    const res = await classifyQuality(store, { judge, shots: 5 });
+
+    assert.strictEqual(res.written, 1);
+    assert.strictEqual(res.failed, 0);
+    const row = await store.get('SELECT verdict FROM item_quality');
+    assert.strictEqual(row.verdict, 'promotion');
+  } finally { await cleanup(); }
+});
+
+test('classifyQuality: all shots failing writes nothing and counts as one failure', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Some headline','x', now())`, [src.id]);
+
+    const judge = fakeJudge([null, null, null, null, null]);
+    const res = await classifyQuality(store, { judge, shots: 5 });
+
+    assert.strictEqual(res.written, 0);
+    assert.strictEqual(res.failed, 1);
+    assert.strictEqual((await store.all('SELECT 1 FROM item_quality')).length, 0);
+  } finally { await cleanup(); }
+});
+
+test('classifyQuality passes voteTemperature through to the judge call options', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','rss',true) RETURNING id");
+    await store.run(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'news','Some headline','x', now())`, [src.id]);
+
+    const seenTemps = [];
+    const judge = async (prompt, opts) => { seenTemps.push(opts.temperature); return { verdict: 'intel' }; };
+    await classifyQuality(store, { judge, shots: 3, voteTemperature: 0.9 });
+
+    assert.deepStrictEqual(seenTemps, [0.9, 0.9, 0.9]);
   } finally { await cleanup(); }
 });

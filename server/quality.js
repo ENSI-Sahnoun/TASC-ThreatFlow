@@ -74,7 +74,10 @@ function buildPrompt(item) {
   ].join('\n');
 }
 
-async function classifyQuality(store, { judge = judgeText, model = DEFAULT_MODEL, concurrency = CONCURRENCY, limit = null } = {}) {
+async function classifyQuality(store, {
+  judge = judgeText, model = DEFAULT_MODEL, concurrency = CONCURRENCY, limit = null,
+  shots = 5, voteTemperature = 0.7,
+} = {}) {
   const pending = await store.all(
     `SELECT i.id, i.title, i.summary
        FROM items i
@@ -95,17 +98,22 @@ async function classifyQuality(store, { judge = judgeText, model = DEFAULT_MODEL
       next += 1;
       if (i >= pending.length) return;
       const item = pending[i];
+      const prompt = buildPrompt(item);
 
-      const result = await judge(buildPrompt(item), { schema: SCHEMA, model });
-      // judgeText already rejects anything outside the enum, so a non-null result is a valid
-      // verdict. Anything else writes nothing and is retried on the next run.
-      if (!result) { failed += 1; continue; }
+      const replies = await Promise.all(
+        Array.from({ length: shots }, () => judge(prompt, { schema: SCHEMA, model, temperature: voteTemperature })));
+      const verdicts = replies.filter(Boolean).map((r) => r.verdict);
+      const verdict = pickVerdict(verdicts);
+
+      // pickVerdict only returns null when every shot failed — same "write nothing, retry
+      // next run" contract the single-shot version had.
+      if (!verdict) { failed += 1; continue; }
 
       await store.run(
         `INSERT INTO item_quality (item_id, verdict, model) VALUES ($1,$2,$3)
          ON CONFLICT (item_id) DO NOTHING`,
-        [item.id, result.verdict, model]);
-      counts[result.verdict] += 1;
+        [item.id, verdict, model]);
+      counts[verdict] += 1;
       written += 1;
     }
   }
