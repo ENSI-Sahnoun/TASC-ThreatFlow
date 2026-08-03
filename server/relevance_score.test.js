@@ -52,52 +52,52 @@ test('rung 1 requires recency: the same high-severity asset match when old drops
   assert.strictEqual(tierOf(PROFILE, i), 'watch');
 });
 
-// --- Rung 2: KEV + domain match + critical ---
+// --- A critical, KEV-listed item in a followed domain with NO asset match: watch, not act_now ---
 
-test('rung 2: a critical KEV item in a followed domain is act_now without an asset match', () => {
+test('a critical KEV item in a followed domain with no asset match is watch, not act_now', () => {
   const i = item({ domains: ['ransomware'], cve: { kevListed: true, epssScore: null, severity: 'critical', cvssScore: 9.8 } });
-  assert.strictEqual(tierOf(PROFILE, i), 'act_now');
-});
-
-test('rung 2 needs critical: the same item at high severity is watch, not act_now', () => {
-  const i = item({ domains: ['ransomware'], cve: { kevListed: true, epssScore: null, severity: 'high', cvssScore: 8.1 } });
   assert.strictEqual(tierOf(PROFILE, i), 'watch');
 });
 
-// --- Rung 3: asset match alone ---
+test('the same item, when old, drops to low — domain-only urgency still requires recency', () => {
+  const i = item({ domains: ['ransomware'], publishedAt: OLD, cve: { kevListed: true, epssScore: null, severity: 'critical', cvssScore: 9.8 } });
+  assert.strictEqual(tierOf(PROFILE, i), 'low');
+});
 
-test('rung 3: a vendor-only asset match with no severity is watch at any age', () => {
+// --- Rung 2: asset match alone ---
+
+test('rung 2: a vendor-only asset match with no severity is watch at any age', () => {
   assert.strictEqual(tierOf(PROFILE, item({ cpes: [{ vendor: 'fortinet', product: 'other' }] })), 'watch');
   assert.strictEqual(tierOf(PROFILE, item({ cpes: [{ vendor: 'fortinet', product: 'other' }], publishedAt: OLD })), 'watch');
 });
 
-// --- Rung 4: domain + floor + recent ---
+// --- Rung 3: domain + floor + recent ---
 
-test('rung 4: a followed domain at the severity floor and recent is watch', () => {
+test('rung 3: a followed domain at the severity floor and recent is watch', () => {
   assert.strictEqual(tierOf(PROFILE, item({ domains: ['ransomware'], severity: 'medium' })), 'watch');
 });
 
-test('rung 4 respects the floor: below it the item falls to low', () => {
+test('rung 3 respects the floor: below it the item falls to low', () => {
   assert.strictEqual(tierOf(PROFILE, item({ domains: ['ransomware'], severity: 'low' })), 'low');
 });
 
-// --- Rung 5: sector match ---
+// --- Rung 4: sector match ---
 
-test('rung 5: a recent item naming the profile sector is watch', () => {
+test('rung 4: a recent item naming the profile sector is watch', () => {
   assert.strictEqual(tierOf(PROFILE, item({ industry: 'finance' })), 'watch');
 });
 
-// --- Rung 6 / 7 ---
+// --- Rung 5 / 6 ---
 
-test('rung 6: a followed domain with no severity is low', () => {
+test('rung 5: a followed domain with no severity is low', () => {
   assert.strictEqual(tierOf(PROFILE, item({ domains: ['ransomware'] })), 'low');
 });
 
-test('rung 6: severity at or above the floor with no personal link is low', () => {
+test('rung 5: severity at or above the floor with no personal link is low', () => {
   assert.strictEqual(tierOf(PROFILE, item({ severity: 'critical' })), 'low');
 });
 
-test('rung 7: nothing matching is not_yours', () => {
+test('rung 6: nothing matching is not_yours', () => {
   assert.strictEqual(tierOf(PROFILE, item()), 'not_yours');
 });
 
@@ -119,7 +119,8 @@ test('an unknown severity never satisfies the floor', () => {
 // promote it wrongly.
 test('a v2 score is judged on v2 bands, never promoted to critical', () => {
   const i = item({ domains: ['ransomware'], cvssScore: 9.3, cvssVersion: '2.0', cve: { kevListed: true, epssScore: null, severity: null, cvssScore: 9.3 } });
-  // v2 9.3 is 'high', so rung 2 (which needs critical) must not fire.
+  // v2 9.3 is 'high', not 'critical' — irrelevant to act_now now that act_now requires an asset
+  // match regardless of severity band; this only proves the item still lands on watch (rung 3).
   assert.strictEqual(tierOf(PROFILE, i), 'watch');
 });
 
