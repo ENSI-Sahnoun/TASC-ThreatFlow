@@ -24,10 +24,23 @@ function rankOf(sourceName) {
   return i === -1 ? SOURCE_RANK.length : i;
 }
 
+// CISA publishes dueDate as a bare YYYY-MM-DD. It is stored in a DATE column, so it is passed
+// through as a string rather than turned into a Date — constructing one here would apply the
+// server's timezone to a date that has none and can shift it by a day.
+const DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function kevDueDateFrom(kevRow) {
+  if (!kevRow || !kevRow.raw_json) return null;
+  let raw;
+  try { raw = JSON.parse(kevRow.raw_json); } catch { return null; }
+  const due = raw && raw.dueDate;
+  return typeof due === 'string' && DUE_DATE_RE.test(due) ? due : null;
+}
+
 async function rebuildCveIntel(store) {
   const rows = await store.all(
     `SELECT ic.cve_id, i.id AS item_id, i.source_id, i.cvss_score, i.epss_score, i.severity, i.summary,
-            i.published_at, i.exploitation_status, s.name AS source_name
+            i.published_at, i.exploitation_status, i.raw_json, s.name AS source_name
        FROM item_cves ic
        JOIN items i ON i.id = ic.item_id
        JOIN sources s ON s.id = i.source_id`);
@@ -58,6 +71,11 @@ async function rebuildCveIntel(store) {
       const kevRow = evidence.find((e) => e.source_name === KEV_SOURCE);
       const exploited = kevRow || evidence.find((e) => e.exploitation_status === 'actively_exploited');
 
+      // The remediation deadline CISA set, read from the KEV record itself. Same rule as
+      // kev_added_at: only the real CISA row can supply it, because an incidentally-flagged
+      // NVD row has no deadline to give. Unparseable or absent means null, never a guess.
+      const kevDueDate = kevDueDateFrom(kevRow);
+
       // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
       // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
       // and become the canonical description.
@@ -84,10 +102,11 @@ async function rebuildCveIntel(store) {
 
       await t.run(
         `INSERT INTO cve_intel (cve_id, cvss_score, cvss_source, severity, epss_score, kev_listed,
-                                kev_added_at, description, first_seen, last_seen, source_count)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                                kev_added_at, kev_due_date, description, first_seen, last_seen, source_count)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [cveId, cvss, winner ? winner.source_name : null, severity,
          epss ? Number(epss.epss_score) : null, Boolean(exploited), kevRow ? kevRow.published_at : null,
+         kevDueDate,
          description,
          times.length ? new Date(times[0]) : null,
          times.length ? new Date(times[times.length - 1]) : null,

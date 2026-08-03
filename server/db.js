@@ -188,6 +188,9 @@ async function applySchema(s = store) {
       epss_score   DOUBLE PRECISION,
       kev_listed   BOOLEAN NOT NULL DEFAULT false,
       kev_added_at TIMESTAMPTZ,
+      -- CISA's remediation deadline. The only externally-set date in the corpus: every other
+      -- urgency signal here is derived, this one is stated by the authority that set it.
+      kev_due_date DATE,
       description  TEXT,
       first_seen   TIMESTAMPTZ,
       last_seen    TIMESTAMPTZ,
@@ -269,6 +272,7 @@ async function applySchema(s = store) {
     -- CREATE TABLE IF NOT EXISTS never alters an existing table, so the column needs this too.
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_due_date DATE;
   `);
 }
 

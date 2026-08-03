@@ -5,10 +5,18 @@ const { cpesFromRaw } = require('../cpe');
 
 const kev = {
   async fetch(source, ctx) {
-    const limit = Number(source.requestBody) || 100;
+    const limit = Number(source.requestBody) || 2000;
     const res = await ctx.request(source.url, { timeoutMs: 25000, headers: { Accept: 'application/json' } });
     if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-    const vulns = (JSON.parse(res.body).vulnerabilities || []).slice(-limit).reverse();
+    // Sort before slicing. The catalog is not ordered by dateAdded, so the previous
+    // `.slice(-limit)` returned an arbitrary window — in practice 100 entries from 2021, which
+    // made "actively exploited" the stalest signal in the app instead of the most urgent.
+    // An entry with no dateAdded sorts last but is still eligible: absent metadata is not a
+    // reason to drop a known-exploited vulnerability.
+    const vulns = (JSON.parse(res.body).vulnerabilities || [])
+      .slice()
+      .sort((a, b) => String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')))
+      .slice(0, limit);
     return vulns.filter((v) => v.cveID).map((v) => normalizedItem({
       external_id: v.cveID,
       title: v.cveID,
