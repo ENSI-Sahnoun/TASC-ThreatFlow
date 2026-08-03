@@ -85,6 +85,13 @@ export function explanation(relevance: Relevance | null | undefined): string {
   return matchSentence(relevance?.matches);
 }
 
+// True only when `explanation()` would render the actual model output rather than the
+// deterministic template — the one case that may carry an "AI-generated" label. The template
+// reads like a sentence too, but it's rule-based, not model output.
+export function isModelWritten(relevance: Relevance | null | undefined): boolean {
+  return !!relevance?.sentence?.trim();
+}
+
 // Short badge for a demoted item. `intel` and an absent verdict both render nothing — the
 // common case should add no visual noise at all.
 const QUALITY_LABELS: Record<string, string> = {

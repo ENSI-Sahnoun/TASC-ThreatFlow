@@ -454,11 +454,28 @@ function createApp(store) {
   app.get('/api/items/:id', h(async (req, res) => {
     const id = parseId(req.params.id);
     const item = id && await store.get(`
-      SELECT items.*, sources.name AS source_name, sources.tier AS source_tier, sources.url AS source_url
+      SELECT items.*, sources.name AS source_name, sources.tier AS source_tier, sources.url AS source_url,
+             sources.fetch_kind AS source_fetch_kind, sources.last_status AS source_status
       FROM items JOIN sources ON sources.id = items.source_id
       WHERE items.id = $1
     `, [id]);
     if (!item) return res.status(404).json({ error: 'not found' });
+
+    // Same shape GET /api/items builds per row — the detail page gets nothing "for free" from
+    // that endpoint, so without this a single item's relevance/quality never reaches the page
+    // that has room to actually show it (rather than a hover-only badge in the dense list).
+    const profile = await resolveProfile(req);
+    let relevance = null;
+    if (profile) {
+      const rel = await store.get(
+        'SELECT tier, matches FROM item_relevance WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+        [id, profile.id, profile.profile_version]);
+      const prose = await store.get(
+        'SELECT sentence FROM item_relevance_prose WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+        [id, profile.id, profile.profile_version]);
+      relevance = { tier: rel?.tier ?? 'not_yours', matches: rel?.matches ?? [], sentence: prose?.sentence ?? null };
+    }
+    const quality = await store.get('SELECT verdict FROM item_quality WHERE item_id = $1', [id]);
     // Drill-down (the demo's headline feature) needs the associated entities, not just
     // the flat row. Embed each child collection so a detail view has one source of truth.
     const cves = (await store.all('SELECT cve_id FROM item_cves WHERE item_id = $1', [id])).map((r) => r.cve_id);
@@ -491,6 +508,8 @@ function createApp(store) {
       ...item, raw, cves, iocs, actors, families, domains, ip_intel: ipIntel,
       clusterId: cluster ? cluster.id : null,
       relatedStoryCount: cluster ? cluster.related_count : 0,
+      relevance,
+      quality: quality ? { verdict: quality.verdict } : null,
     });
   }));
 

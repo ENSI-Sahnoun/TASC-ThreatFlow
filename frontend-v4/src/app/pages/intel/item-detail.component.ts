@@ -12,6 +12,7 @@ import { CopyButtonComponent } from '../../ui/copy-button.component';
 import { BrowserWindowComponent } from '../../ui/browser-window.component';
 import { RecordCardComponent } from '../../ui/record-card.component';
 import { relativeTime, stripHtml } from '../../core/format';
+import { tierLabel, explanation, isModelWritten } from '../../core/relevance';
 import type { ItemDetail, RelatedStory } from '../../core/models';
 
 interface EntityLink { key: string; label: string; path: string[]; }
@@ -35,8 +36,8 @@ interface EntityLink { key: string; label: string; path: string[]; }
 
       <section class="header">
         <div class="head-row">
-          @if (sourceFetchKind() !== null && sourceFetchKind() !== 'rss') {
-            <tf-source-dot [status]="sourceStatus()" [name]="d.source_name ?? 'Unknown source'" />
+          @if (d.source_fetch_kind !== 'rss') {
+            <tf-source-dot [status]="d.source_status" [name]="d.source_name ?? 'Unknown source'" />
             <span class="source-name">{{ d.source_name ?? 'Unknown source' }}</span>
           }
           <span class="time">{{ relativeTime(d.published_at) }}</span>
@@ -52,14 +53,14 @@ interface EntityLink { key: string; label: string; path: string[]; }
           </p>
         }
 
-        @if (sourceFetchKind() !== null && sourceFetchKind() !== 'rss') {
+        @if (d.source_fetch_kind !== 'rss') {
           <tf-record-card [item]="d" />
         } @else {
           <tf-browser-window
             [url]="d.link" [title]="d.title" [sourceName]="d.source_name ?? 'Unknown source'"
-            [sourceStatus]="sourceStatus()" [time]="relativeTime(d.published_at)"
+            [sourceStatus]="d.source_status" [time]="relativeTime(d.published_at)"
             [summary]="cleanedSummary()"
-            [allowExpand]="sourceFetchKind() === 'rss'"
+            [allowExpand]="d.source_fetch_kind === 'rss'"
           />
         }
 
@@ -72,6 +73,17 @@ interface EntityLink { key: string; label: string; path: string[]; }
           @if (d.exploitation_status) { <div><dt>Exploitation</dt><dd>{{ d.exploitation_status }}</dd></div> }
         </dl>
       </section>
+
+      @if (d.relevance; as rel) {
+        <tf-panel title="Relevance to you" [subtitle]="tierLabel(rel.tier)">
+          <p class="rel-sentence">
+            {{ explanation(rel) }}
+            @if (isModelWritten(rel)) {
+              <span class="ai-tag" title="Written by a local model — the tier itself is decided by deterministic rules, not the model">AI-generated</span>
+            }
+          </p>
+        </tf-panel>
+      }
 
       <tf-panel title="Entities">
         @if (entities().length === 0 && d.domains.length === 0) {
@@ -228,6 +240,15 @@ interface EntityLink { key: string; label: string; path: string[]; }
       background: var(--surface-2); padding: 2px 8px; border-radius: 999px; white-space: nowrap;
     }
 
+    .rel-sentence { margin: 0; font-size: var(--fs-sm); color: var(--ink); line-height: 1.5; }
+    /* Distinguishes actual model output from the deterministic fallback sentence, which reads
+       like prose but isn't AI-written and must not be tagged as if it were. */
+    .ai-tag {
+      display: inline-block; margin-left: 8px; font-size: var(--fs-xs); font-weight: 590;
+      color: var(--ink-2); background: var(--surface-2); padding: 2px 8px; border-radius: 999px;
+      vertical-align: middle; cursor: help;
+    }
+
     .tf-scroll { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
     thead th, tbody td { border-bottom: var(--hair) solid var(--hairline); }
@@ -300,12 +321,13 @@ export class ItemDetailComponent {
   loading = signal(true);
   notFound = signal(false);
   error = signal(false);
-  sourceStatus = signal<string | null>(null);
-  sourceFetchKind = signal<string | null>(null);
   related = signal<RelatedStory[]>([]);
   private expandedIps = signal<Set<string>>(new Set());
 
   relativeTime = relativeTime;
+  tierLabel = tierLabel;
+  explanation = explanation;
+  isModelWritten = isModelWritten;
 
   rawJsonText = computed(() => {
     const d = this.detail();
@@ -332,8 +354,6 @@ export class ItemDetailComponent {
       }
       this.id = id;
       this.detail.set(null);
-      this.sourceStatus.set(null);
-      this.sourceFetchKind.set(null);
       this.related.set([]);
       this.expandedIps.set(new Set());
       this.loadDetail();
@@ -348,7 +368,6 @@ export class ItemDetailComponent {
       next: (d) => {
         this.detail.set(d);
         this.loading.set(false);
-        this.loadSourceStatus(d.source_id);
         // The count is on the detail payload, so a second request only happens when there is
         // something to fetch. No panel is rendered when there are no links — an empty-state
         // placeholder would advertise a feature that has nothing to say about this item.
@@ -389,17 +408,4 @@ export class ItemDetailComponent {
     });
   }
 
-  // Source health for the item's dot isn't part of GET /api/items/:id (only name/tier/url are
-  // joined in) — fetch it from the same sourceStats endpoint the Arsenal dossier already uses.
-  // A failure here just leaves the dot in its "never synced" fallback state; it isn't fatal to
-  // viewing the record.
-  private loadSourceStatus(sourceId: number): void {
-    this.api.sourceStats(sourceId).subscribe({
-      next: (s) => {
-        this.sourceStatus.set(s.source.last_status);
-        this.sourceFetchKind.set(s.source.fetch_kind);
-      },
-      error: () => { /* dot falls back to its default state; expand stays hidden until it loads */ },
-    });
-  }
 }

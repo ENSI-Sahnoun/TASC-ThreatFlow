@@ -115,6 +115,9 @@ export interface ItemDetail extends Item {
   // since story_links pairs clusters and a non-primary member is a duplicate of its primary.
   clusterId: number | null;
   relatedStoryCount: number;
+  // Only GET /api/items/:id joins these — not part of the base Item the list endpoint returns.
+  source_fetch_kind: string;
+  source_status: string | null;
 }
 
 // A model-suggested link to a DIFFERENT story that looks related — not another outlet covering

@@ -47,13 +47,25 @@ export class ProfileService {
     } catch { /* storage unavailable (private mode); selection still works for this session */ }
   }
 
+  // The server already recomputes relevance in the background on create/update (~1s, so it
+  // isn't worth blocking the write itself on) — but nothing else waits for it, so a caller that
+  // navigates straight to the item list races it and reads every item at the 'not_yours'
+  // default. `done` fires only once this explicit recompute call resolves, so anyone reacting
+  // to it (navigation, a reload) sees the real verdicts on the very first paint.
+  //
+  // Prose is the opposite: it takes minutes and needs Ollama, so it is fired and forgotten —
+  // waiting for it would make every profile save feel broken.
   create(payload: ProfilePayload, done?: (p: Profile) => void, fail?: (message: string) => void): void {
     this.api.createProfile(payload).subscribe({
       next: (p) => {
         this._profiles.update((rows) => [p, ...rows]);
         this._loaded.set(true);
         this.select(p.id);
-        done?.(p);
+        this.api.generateProfileProse(p.id).subscribe({ error: () => {} });
+        this.api.recomputeProfileRelevance(p.id).subscribe({
+          next: () => done?.(p),
+          error: () => done?.(p),
+        });
       },
       // The API returns 400 with a specific reason (duplicate name, unknown sector, non-slug
       // vendor). Surfacing it beats a generic failure the user cannot act on.
@@ -64,7 +76,11 @@ export class ProfileService {
   update(id: number, payload: ProfilePayload, done?: (p: Profile) => void): void {
     this.api.updateProfile(id, payload).subscribe((p) => {
       this._profiles.update((rows) => rows.map((r) => (r.id === p.id ? p : r)));
-      done?.(p);
+      this.api.generateProfileProse(p.id).subscribe({ error: () => {} });
+      this.api.recomputeProfileRelevance(p.id).subscribe({
+        next: () => done?.(p),
+        error: () => done?.(p),
+      });
     });
   }
 }

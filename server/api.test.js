@@ -609,6 +609,81 @@ test('GET /api/clusters/:id/related 404s for unknown and non-integer ids', async
   } finally { await cleanup(); }
 });
 
+// The detail page decides between a record-card and a browser-window preview based on
+// fetch_kind, and shows a source-health dot based on last_status. Both must arrive on the
+// initial response — a second request for them lands after first paint and flips the branch,
+// visible as a flash between the two layouts.
+test('GET /api/items/:id includes the source fetch_kind and status inline', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const sid = (await store.get(
+      "INSERT INTO sources (name, fetch_kind, active, last_status) VALUES ('NVD','nvd',true,'ok') RETURNING id")).id;
+    const item = await store.get(
+      "INSERT INTO items (source_id, category, title) VALUES ($1,'cve','CVE-2026-1') RETURNING id", [sid]);
+    const res = await get(createApp(store), `/api/items/${item.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.source_fetch_kind, 'nvd');
+    assert.strictEqual(res.body.source_status, 'ok');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id omits relevance and quality when no profile header is sent', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const res = await get(app, `/api/items/${hitId}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.relevance, null);
+    assert.strictEqual(res.body.quality, null);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id returns tier, matches and sentence for the active profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    await store.run(
+      `INSERT INTO item_relevance_prose (profile_id, item_id, profile_version, sentence, model)
+       VALUES ($1, $2, $3, 'Matches your Fortinet stack.', 'test-model')`,
+      [p.body.id, hitId, p.body.profile_version]);
+
+    const res = await send(app, 'GET', `/api/items/${hitId}`, null, { 'X-Profile-Id': String(p.body.id) });
+    assert.strictEqual(res.body.relevance.tier, 'act_now');
+    assert.ok(res.body.relevance.matches.some((m) => m.kind === 'product'));
+    assert.strictEqual(res.body.relevance.sentence, 'Matches your Fortinet stack.');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id serves not_yours with no prose sentence when the item has no relevance row yet', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', `/api/items/${missId}`, null, { 'X-Profile-Id': String(p.body.id) });
+    assert.strictEqual(res.body.relevance.tier, 'not_yours');
+    assert.deepStrictEqual(res.body.relevance.matches, []);
+    assert.strictEqual(res.body.relevance.sentence, null);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id includes the quality verdict when one has been classified', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      "INSERT INTO item_quality (item_id, verdict, model) VALUES ($1, 'roundup', 'test-model')", [hitId]);
+    const res = await get(createApp(store), `/api/items/${hitId}`);
+    assert.deepStrictEqual(res.body.quality, { verdict: 'roundup' });
+  } finally { await cleanup(); }
+});
+
 test('GET /api/items/:id carries relatedStoryCount for a cluster primary', async () => {
   const { store, cleanup } = await makeTempDb();
   try {

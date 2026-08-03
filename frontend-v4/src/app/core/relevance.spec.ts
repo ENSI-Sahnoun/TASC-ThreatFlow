@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { tierLabel, tierToken, tierIsProminent, matchSentence, explanation, qualityLabel, qualityHint, TIER_ORDER } from './relevance';
+import {
+  tierLabel, tierToken, tierIsProminent, matchSentence, explanation, isModelWritten,
+  qualityLabel, qualityHint, TIER_ORDER,
+} from './relevance';
 import type { RelevanceMatch } from './models';
 
 const m = (kind: RelevanceMatch['kind'], value: string): RelevanceMatch => ({ kind, value });
@@ -89,6 +92,23 @@ describe('explanation', () => {
 
   it('still explains an absent verdict', () => {
     expect(explanation(null)).toBe('Nothing in this matches your profile.');
+  });
+});
+
+// Only the actual model output may be labelled AI-generated — the deterministic template reads
+// like prose but is rule-based, and tagging it as AI would misattribute it.
+describe('isModelWritten', () => {
+  const base = { tier: 'act_now' as const, matches: [m('product', 'fortinet fortios')] };
+
+  it('is true only when a real model sentence is present', () => {
+    expect(isModelWritten({ ...base, sentence: 'You run FortiOS, so this is directly exposed.' })).toBe(true);
+  });
+
+  it('is false for the deterministic fallback, whitespace-only, or an absent verdict', () => {
+    expect(isModelWritten({ ...base, sentence: null })).toBe(false);
+    expect(isModelWritten(base)).toBe(false);
+    expect(isModelWritten({ ...base, sentence: '   ' })).toBe(false);
+    expect(isModelWritten(null)).toBe(false);
   });
 });
 

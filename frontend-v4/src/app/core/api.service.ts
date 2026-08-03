@@ -136,6 +136,18 @@ export class ApiService {
     return this.http.delete(`/api/profiles/${id}`);
   }
 
+  // Deterministic, ~1s over the whole corpus — the route awaits it before responding, so this
+  // observable only completes once every item's tier is actually current for the profile.
+  recomputeProfileRelevance(id: number): Observable<unknown> {
+    return this.http.post(`/api/profiles/${id}/relevance/recompute`, {});
+  }
+
+  // Needs Ollama, takes minutes, and — unlike recompute — the route returns 202 immediately and
+  // writes in the background: fire this and move on, never await it for correctness.
+  generateProfileProse(id: number): Observable<unknown> {
+    return this.http.post(`/api/profiles/${id}/relevance/prose`, {});
+  }
+
   sectors(): Observable<Sector[]> {
     return this.http.get<Sector[]>('/api/sectors');
   }
