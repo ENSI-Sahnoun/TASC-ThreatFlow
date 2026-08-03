@@ -30,6 +30,41 @@ const MATCH_PHRASES = {
   severity: (v) => `its severity is ${v}`,
 };
 
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// The deterministic sentence, built from the consequence slots rather than from match
+// key/value pairs. This is what a user reads whenever Ollama is unreachable or its output is
+// rejected, so it has to stand on its own — the v1 fallback was "Matches your stack (microsoft
+// windows)", which names the join condition and no consequence at all.
+function templateSentence(consequence, matches) {
+  const c = consequence || {};
+  // An unmapped product still needs a noun. "this system" is vague but true; naming the raw CPE
+  // slug would be worse prose and no more informative to a non-expert.
+  const target = c.role ? c.role.text : 'this system';
+  const parts = [];
+  if (c.reach && c.impact) parts.push(`${cap(c.reach.text)} could ${c.impact.text} ${target}`);
+  else if (c.reach) parts.push(`${cap(c.reach.text)} could reach ${target}`);
+  else if (c.impact) parts.push(`This could ${c.impact.text} ${target}`);
+  if (c.urgency) parts.push(`It is ${c.urgency.text}`);
+  // Nothing derivable from the vector — fall back to why the verdict fired at all, which is
+  // still better than silence.
+  if (!parts.length) return cap(describeMatches(matches));
+  return `${parts.join('. ')}.`;
+}
+
+// Slots rendered as prose clauses, never as JSON. A small model shown key/value input copies it
+// straight into the output — the failure this file's history already records.
+function factLines(consequence, matches) {
+  const c = consequence || {};
+  const lines = [];
+  if (c.reach) lines.push(`who could do it: ${c.reach.text}`);
+  if (c.impact) lines.push(`what they could do: ${c.impact.text}`);
+  if (c.role) lines.push(`what that is: ${c.role.text}`);
+  if (c.urgency) lines.push(`how urgent: ${c.urgency.text}`);
+  if (!lines.length) return describeMatches(matches);
+  return lines.join('; ');
+}
+
 function describeMatches(matches) {
   const parts = (matches || [])
     .map((m) => (MATCH_PHRASES[m.kind] ? MATCH_PHRASES[m.kind](m.value) : null))
@@ -64,7 +99,7 @@ function buildPrompt(profile, item) {
     // first batch produced near-identical boilerplate for every such row. The upstream
     // description is what makes one CVE distinguishable from the next.
     ...(item.summary ? [`Description: "${String(item.summary).slice(0, 400)}"`] : []),
-    `Facts: ${describeMatches(item.matches)}.`,
+    `Facts: ${factLines(item.consequence, item.matches)}.`,
     'Rules: at most 30 words, address the reader as "you", use only the facts given, invent',
     'nothing, and never mention this task, the facts list, or the word "report".',
     // Without this the model volunteers things like "You are a victim of ransomware attacks and
@@ -112,7 +147,7 @@ async function generateProse(store, profileId, { judge = judgeText, model = DEFA
 
   // Only rows that need a sentence: a prominent tier, at the current version, with none written.
   const pending = await store.all(
-    `SELECT ir.item_id, ir.tier, ir.matches, i.title, i.summary
+    `SELECT ir.item_id, ir.tier, ir.matches, ir.consequence, i.title, i.summary
        FROM item_relevance ir
        JOIN items i ON i.id = ir.item_id
       WHERE ir.profile_id = $1
@@ -156,4 +191,4 @@ async function generateProse(store, profileId, { judge = judgeText, model = DEFA
   return { considered: pending.length, written, failed };
 }
 
-module.exports = { generateProse, buildPrompt, isUsableSentence, PROSE_TIERS };
+module.exports = { generateProse, buildPrompt, templateSentence, isUsableSentence, PROSE_TIERS };
