@@ -95,3 +95,116 @@ export function oneUpgradeCloses(items: RemediationQueueItem[]): UpgradeCloses |
   }
   return best;
 }
+
+// ---- Step 1 diagram: origin -> gate -> outcome ----
+//
+// Mirrors server/cvss.js's parseVector() metric extraction (client-side, since the guided page
+// only ever receives the raw vector string, never pre-parsed metrics) — kept intentionally
+// minimal: this extracts the metric map only, it does not score anything.
+export function parseVectorMetrics(vector: string | null | undefined): Record<string, string> | null {
+  if (typeof vector !== 'string') return null;
+  const s = vector.trim();
+  const m = s.match(/^CVSS:(\d\.\d)\/(.+)$/i);
+  if (!m) return null;
+  const metrics: Record<string, string> = {};
+  for (const part of m[2].split('/')) {
+    const [k, v] = part.split(':');
+    if (k && v) metrics[k.toUpperCase()] = v.toUpperCase();
+  }
+  return metrics;
+}
+
+export interface DiagramNode {
+  id: 'origin' | 'gate' | 'outcome';
+  title: string;
+  detail: string;
+  from: string;
+}
+
+export interface DiagramAnnotation {
+  text: string;
+  from: string;
+}
+
+export interface ReachDiagram {
+  nodes: [DiagramNode, DiagramNode, DiagramNode];
+  edges: { from: string; to: string }[];
+  gateAnnotation: DiagramAnnotation | null;
+}
+
+// Exact wording from the spec's own prose ("N internet, A adjacent network, L already on the
+// machine, P physical access") — not the spec's own ASCII sketch, which mislabels the AV:L box
+// as "already on network"; the prose is the more precise of the two and is what this follows.
+const ORIGIN: Record<string, { title: string; detail: string }> = {
+  N: { title: 'The internet', detail: 'Reachable without being on the network first' },
+  A: { title: 'Adjacent network', detail: 'Reachable from the same network segment' },
+  L: { title: 'Already on the machine', detail: 'Requires local access to the system first' },
+  P: { title: 'Physical access', detail: 'Requires physically touching the device' },
+};
+
+const GATE: Record<string, { title: string; detail: string }> = {
+  N: { title: 'No account needed', detail: 'No credentials are required' },
+  L: { title: 'A normal account', detail: 'Any ordinary user account is enough' },
+  H: { title: 'An admin account', detail: 'Requires administrative privileges' },
+};
+
+const UI_ANNOTATION: Record<string, string> = {
+  N: 'needs nothing from anyone',
+  R: 'needs someone to click something',
+};
+
+// Same verbs consequence.js's buildImpact() uses for C/I/A, reused so the diagram and the impact
+// panel never describe the same H metric two different ways.
+const OUTCOME_VERBS: Record<string, string> = { C: 'read', I: 'change', A: 'shut down' };
+
+function joinVerbs(values: string[]): string {
+  if (values.length === 1) return values[0];
+  return `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}`;
+}
+
+function originNode(av: string | undefined): DiagramNode {
+  const known = av ? ORIGIN[av] : undefined;
+  return known
+    ? { id: 'origin', title: known.title, detail: known.detail, from: `AV:${av}` }
+    : { id: 'origin', title: 'Reach not stated', detail: 'The vector does not state where an attacker must be', from: `AV:${av ?? 'none'}` };
+}
+
+function gateNode(pr: string | undefined): DiagramNode {
+  const known = pr ? GATE[pr] : undefined;
+  return known
+    ? { id: 'gate', title: known.title, detail: known.detail, from: `PR:${pr}` }
+    : { id: 'gate', title: 'Privilege not stated', detail: 'The vector does not state what access is required first', from: `PR:${pr ?? 'none'}` };
+}
+
+// Only H-valued C/I/A metrics reach this node — an :L metric is a real but partial effect, and
+// rendering it here would overstate what the diagram is claiming (consequence.js's buildImpact()
+// does render :L, as "partly read" etc.; this diagram deliberately does not, per the spec's own
+// rule that C/I/A "at H" fill the outcome node).
+function outcomeNode(metrics: Record<string, string>): DiagramNode {
+  const verbs: string[] = [];
+  const from: string[] = [];
+  for (const key of ['C', 'I', 'A']) {
+    if (metrics[key] === 'H') { verbs.push(OUTCOME_VERBS[key]); from.push(`${key}:H`); }
+  }
+  if (!verbs.length) {
+    return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector reaches complete read, change or shutdown', from: 'C/I/A' };
+  }
+  return { id: 'outcome', title: joinVerbs(verbs), detail: joinVerbs(verbs), from: from.join('/') };
+}
+
+// Renders the CVSS vector as a path: origin -> reach -> what it gets. Draws only what the vector
+// already states via cvss.js's own metric letters — no attacker avatars, no blast radius, no
+// simulation beyond what AV/PR/UI/C/I/A already say.
+export function reachDiagram(metrics: Record<string, string> | null | undefined): ReachDiagram {
+  const m = metrics ?? {};
+  const origin = originNode(m['AV']);
+  const gate = gateNode(m['PR']);
+  const outcome = outcomeNode(m);
+  const ui = m['UI'];
+  const uiText = ui ? UI_ANNOTATION[ui] : undefined;
+  return {
+    nodes: [origin, gate, outcome],
+    edges: [{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }],
+    gateAnnotation: uiText ? { text: uiText, from: `UI:${ui}` } : null,
+  };
+}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isPastDue, formatDueDate, groupHasPastDue, queueSummary, groupProgress, oneUpgradeCloses,
+  parseVectorMetrics, reachDiagram,
 } from './remediation';
 import type { RemediationQueueGroup, RemediationQueueItem } from './models';
 
@@ -146,5 +147,96 @@ describe('oneUpgradeCloses', () => {
   });
   it('is null for an empty list', () => {
     expect(oneUpgradeCloses([])).toBeNull();
+  });
+});
+
+describe('parseVectorMetrics', () => {
+  it('extracts a v3.1 vector\'s metrics into an uppercase map', () => {
+    expect(parseVectorMetrics('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'))
+      .toEqual({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' });
+  });
+  it('is null for null/undefined/non-string input', () => {
+    expect(parseVectorMetrics(null)).toBeNull();
+    expect(parseVectorMetrics(undefined)).toBeNull();
+  });
+  it('is null for a string with no CVSS: prefix', () => {
+    expect(parseVectorMetrics('AV:N/AC:L')).toBeNull();
+  });
+});
+
+describe('reachDiagram', () => {
+  it('AV:N reads as the internet', () => {
+    const d = reachDiagram({ AV: 'N', PR: 'N', UI: 'N', C: 'H', I: 'H', A: 'H' });
+    expect(d.nodes[0].title).toBe('The internet');
+    expect(d.nodes[0].from).toBe('AV:N');
+  });
+  it('AV:A reads as the adjacent network', () => {
+    expect(reachDiagram({ AV: 'A' }).nodes[0].title).toBe('Adjacent network');
+  });
+  it('AV:L reads as already on the machine', () => {
+    expect(reachDiagram({ AV: 'L' }).nodes[0].title).toBe('Already on the machine');
+  });
+  it('AV:P reads as physical access', () => {
+    expect(reachDiagram({ AV: 'P' }).nodes[0].title).toBe('Physical access');
+  });
+  it('an absent or unrecognised AV is a stated gap, not a guess', () => {
+    const noAv = reachDiagram({});
+    expect(noAv.nodes[0].title).toBe('Reach not stated');
+    const badAv = reachDiagram({ AV: 'X' });
+    expect(badAv.nodes[0].title).toBe('Reach not stated');
+    expect(badAv.nodes[0].from).toBe('AV:X');
+  });
+
+  it('PR:N reads as no account needed', () => {
+    expect(reachDiagram({ PR: 'N' }).nodes[1].title).toBe('No account needed');
+  });
+  it('PR:L reads as a normal account', () => {
+    expect(reachDiagram({ PR: 'L' }).nodes[1].title).toBe('A normal account');
+  });
+  it('PR:H reads as an admin account', () => {
+    expect(reachDiagram({ PR: 'H' }).nodes[1].title).toBe('An admin account');
+  });
+  it('an absent PR is a stated gap', () => {
+    expect(reachDiagram({}).nodes[1].title).toBe('Privilege not stated');
+  });
+
+  it('UI:N annotates the gate node with "needs nothing from anyone"', () => {
+    const d = reachDiagram({ UI: 'N' });
+    expect(d.gateAnnotation).toEqual({ text: 'needs nothing from anyone', from: 'UI:N' });
+  });
+  it('UI:R annotates the gate node with "needs someone to click something"', () => {
+    const d = reachDiagram({ UI: 'R' });
+    expect(d.gateAnnotation).toEqual({ text: 'needs someone to click something', from: 'UI:R' });
+  });
+  it('an absent UI produces no annotation at all, not a fabricated one', () => {
+    expect(reachDiagram({}).gateAnnotation).toBeNull();
+  });
+
+  it('fills the outcome node with read/change/shut down only for H-valued C/I/A', () => {
+    const d = reachDiagram({ C: 'H', I: 'H', A: 'H' });
+    expect(d.nodes[2].title).toBe('read, change and shut down');
+    expect(d.nodes[2].from).toBe('C:H/I:H/A:H');
+  });
+  it('a single H metric produces a single verb', () => {
+    expect(reachDiagram({ C: 'H' }).nodes[2].title).toBe('read');
+  });
+  it('two H metrics join with "and", not a comma list', () => {
+    expect(reachDiagram({ C: 'H', A: 'H' }).nodes[2].title).toBe('read and shut down');
+  });
+  it('an L-valued metric never reaches the outcome node — only H does', () => {
+    const d = reachDiagram({ C: 'L', I: 'L', A: 'L' });
+    expect(d.nodes[2].title).toBe('No full-control outcome');
+  });
+  it('no metrics at all is a stated gap on the outcome node too', () => {
+    expect(reachDiagram({}).nodes[2].title).toBe('No full-control outcome');
+  });
+
+  it('null metrics produces the same three stated-gap nodes as an empty object', () => {
+    expect(reachDiagram(null)).toEqual(reachDiagram({}));
+  });
+
+  it('always returns exactly two edges, origin->gate and gate->outcome', () => {
+    const d = reachDiagram({ AV: 'N', PR: 'N' });
+    expect(d.edges).toEqual([{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }]);
   });
 });
