@@ -6,6 +6,7 @@ import type {
   DashboardStats, FeedRow, Source, SourceStats, Item, ItemDetail,
   CveIntel, CveDetail, EntityProfile, SearchResults, Facets, ClusterMember, IocRow, IocCheckResult,
   PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet, DomainOption, RelatedStory,
+  ProfileAsset, VersionState, RemediationQueueGroup, RemediationDetail,
 } from './models';
 
 // One method per endpoint and nothing else. No caching, no state — stores own that.
@@ -174,5 +175,29 @@ export class ApiService {
   cpeFacets(q: string, kind: 'vendor' | 'product'): Observable<CpeFacet[]> {
     const params = new HttpParams().set('q', q).set('kind', kind);
     return this.http.get<CpeFacet[]>('/api/cpe-facets', { params });
+  }
+
+  // The remediation queue: every asset the profile has told us about, each carrying its open
+  // (act_now/watch) threats and what remediationFor already decided about each. Grouped and
+  // sorted server-side (server/index.js) — nothing here re-derives that grouping.
+  remediationQueue(profileId: number): Observable<RemediationQueueGroup[]> {
+    return this.http.get<RemediationQueueGroup[]>(`/api/profiles/${profileId}/remediation`);
+  }
+
+  // Per-item remediation detail for the guided page. X-Profile-Id travels via
+  // profileInterceptor, same as every other profile-scoped call — no query param needed here.
+  itemRemediation(itemId: number): Observable<RemediationDetail> {
+    return this.http.get<RemediationDetail>(`/api/items/${itemId}/remediation`);
+  }
+
+  // Records a version on one asset. Omitting versionState lets the server infer it — a version
+  // implies 'known', its absence implies 'unknown' (server/index.js's PATCH handler); 'unset' is
+  // never reachable through this call, by design.
+  recordAssetVersion(
+    profileId: number, vendor: string, product: string,
+    body: { version?: string | null; versionState?: VersionState },
+  ): Observable<ProfileAsset> {
+    return this.http.patch<ProfileAsset>(
+      `/api/profiles/${profileId}/assets/${encodeURIComponent(vendor)}/${encodeURIComponent(product)}`, body);
   }
 }

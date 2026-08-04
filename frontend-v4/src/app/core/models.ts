@@ -283,12 +283,19 @@ export interface Playbook {
   done: string[];
 }
 
+export type VersionState = 'unset' | 'known' | 'unknown';
+
 // The tech-stack rows that actually earn urgency. The legacy vendors/products arrays are kept
 // but cap at the `low` tier.
 export interface ProfileAsset {
   vendor: string;
   product: string;
   exposure: Exposure;
+  // The version a reader told us they run on this asset, and whether they were ever asked.
+  // 'unset' (never asked) is distinct from 'unknown' (asked, declined) — collapsing them would
+  // make the remediation page re-nag on every visit. See server/db.js's profile_assets columns.
+  version: string | null;
+  versionState: VersionState;
 }
 
 // null only when no profile is active. With one, every item carries a tier — an item not yet
@@ -303,6 +310,104 @@ export interface Relevance {
   // not reached yet.
   consequence?: Consequence | null;
   exposure?: Exposure;
+}
+
+// ---- Remediation (Spec B) ----
+
+// One cve_intel.affected_versions element, exactly as server/consolidate.js's versionBounds()
+// produces it and server/version_compare.js / server/remediation.js consume it.
+export interface AffectedVersionEntry {
+  vendor: string;
+  product: string;
+  text: string;
+  startIncluding: string | null;
+  startExcluding: string | null;
+  endIncluding: string | null;
+  endExcluding: string | null;
+  pinned: string | null;
+}
+
+// server/remediation.js's fixTarget() ladder: endExcluding, then patch, then advisory, then
+// none — exclusive, never a hedge between cases. A 'version' result never also carries a patch
+// URL inside itself — endIncluding/pinned never produce 'version' at all (server/remediation.js's
+// fabrication guard). See RemediationQueueItem.patchUrl / RemediationDetail.patchUrl for how a
+// patch link is still shown alongside a 'version' fix (Spec Accuracy Finding 3): as a sibling
+// field the route adds independently, never as a variant of this type.
+export type RemediationFix =
+  | { kind: 'version'; value: string }
+  | { kind: 'patch'; value: string }
+  | { kind: 'advisory'; value: string }
+  | { kind: 'none' };
+
+// server/remediation.js's remediationFor() output — one asset x one item.
+export interface RemediationSummary {
+  status: 'affected' | 'not_covered' | 'unknown';
+  installed: string | null;
+  versionState: VersionState;
+  entry: AffectedVersionEntry | null;
+  fix: RemediationFix;
+  mitigations: PlaybookStep[];
+}
+
+// One row in GET /api/profiles/:id/remediation's per-asset items array.
+export interface RemediationQueueItem extends RemediationSummary {
+  itemId: number;
+  title: string;
+  tier: 'act_now' | 'watch';
+  score: number;
+  // CISA KEV due date (YYYY-MM-DD), read off item_relevance.consequence.urgency.due — null for
+  // anything not KEV-listed, or not yet (re)scored since the due date was recorded.
+  dueDate: string | null;
+  // The CVE's vendor patch URL, independent of which fix.kind was chosen (Spec Accuracy
+  // Finding 3) — never inside `fix` itself. Only rendered by the UI when fix.kind === 'version'
+  // (the spec's "patch link beneath the upgrade instruction, if one exists").
+  patchUrl: string | null;
+}
+
+// One element of GET /api/profiles/:id/remediation's response array — one profile_assets row
+// plus every open (act_now/watch) threat matched to it.
+export interface RemediationQueueGroup {
+  vendor: string;
+  product: string;
+  exposure: Exposure;
+  version: string | null;
+  versionState: VersionState;
+  items: RemediationQueueItem[];
+}
+
+// The `item` row from GET /api/items/:id/remediation — a raw `items` table SELECT *, narrower
+// than ItemDetail: no source name, no cves/iocs/entities. The guided page links back to
+// /intel/:id for everything this type doesn't carry.
+export interface RemediationItemRow {
+  id: number;
+  title: string;
+  summary: string | null;
+  category: string;
+  severity: string | null;
+  cvss_score: number | null;
+  cvss_vector: string | null;
+  link: string | null;
+  published_at: string | null;
+}
+
+// GET /api/items/:id/remediation's full response. `playbook` is the same { steps, done } shape
+// GET /api/items/:id already returns (server/index.js adds the matching playbook_step_state
+// query to this route too) — reusing the existing Playbook type rather than a bespoke
+// steps-only array, so a reload after a version write doesn't forget which steps were ticked.
+export interface RemediationDetail {
+  item: RemediationItemRow;
+  relevance: { tier: string; matches: RelevanceMatch[]; consequence: Consequence | null } | null;
+  playbook: Playbook | null;
+  remediation: RemediationSummary | null;
+  // The profile_assets row remediation was computed against — null when none matched this
+  // item's CPEs. Needed to PATCH a version back (server/index.js's route carries no
+  // vendor/product on `remediation` itself; entry.vendor/product only exist when
+  // affected_versions happened to match too).
+  asset: { vendor: string; product: string; exposure: Exposure } | null;
+  // The CVE's vendor patch URL — same field and same reasoning as RemediationQueueItem.patchUrl
+  // (Spec Accuracy Finding 3): a sibling of `remediation`, shown by the UI only when
+  // remediation.fix.kind === 'version'.
+  patchUrl: string | null;
 }
 
 // Model-assigned signal quality. Purely advisory: a non-intel verdict demotes an item in the
