@@ -1086,3 +1086,174 @@ test('GET /api/items/:id/remediation returns remediation: null when no asset mat
     assert.strictEqual(res.body.remediation, null);
   } finally { await cleanup(); }
 });
+
+// --- Remediation foundation (Spec A): PATCH asset version route ---
+
+test('PATCH /api/profiles/:id/assets/:vendor/:product sets version/versionState and bumps profile_version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    const before = created.body.profile_version;
+
+    const res = await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '7.4.5', versionState: 'known' });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body,
+      { vendor: 'fortinet', product: 'fortios', exposure: 'unknown', version: '7.4.5', versionState: 'known' });
+
+    const after = await get(app, `/api/profiles/${created.body.id}`);
+    assert.strictEqual(after.body.profile_version, before + 1);
+  } finally { await cleanup(); }
+});
+
+// The defect the coordinator caught in review: a PATCH with a version but no explicit
+// versionState must not silently store the version under 'unset', where remediationFor ignores
+// it entirely (installed is only read when versionState === 'known'). A 200 that changes nothing
+// is exactly the reassuring-direction failure this whole feature exists to avoid.
+test('PATCH with a version but no versionState infers "known", not "unset"', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      `UPDATE cve_intel SET affected_versions = $1 WHERE cve_id = 'CVE-2026-1'`,
+      [JSON.stringify([{
+        vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '7.4.5', pinned: null,
+      }])]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '7.4.5' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.versionState, 'known');
+
+    const detail = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    // Affected/not_covered, never unknown — a recorded version must actually be used.
+    assert.notStrictEqual(detail.body.remediation.status, 'unknown');
+    assert.strictEqual(detail.body.remediation.status, 'not_covered'); // 7.4.5 is not < 7.4.5
+  } finally { await cleanup(); }
+});
+
+// The mirror case: no version at all (the reader clicked "I don't know") must read as 'unknown',
+// never 'unset' — 'unset' means "never asked", and a PATCH to this endpoint is proof someone was.
+test('PATCH with no version at all infers "unknown", not "unset"', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+
+    const res = await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`, {});
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.version, null);
+    assert.strictEqual(res.body.versionState, 'unknown');
+  } finally { await cleanup(); }
+});
+
+// An explicit versionState always wins over the inference rule above.
+test('PATCH honors an explicit versionState even when it disagrees with the inference default', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+
+    const res = await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '7.4.5', versionState: 'unknown' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.versionState, 'unknown');
+  } finally { await cleanup(); }
+});
+
+// The gotcha this task's own notes call out: a naive spread of the getProfile() row into
+// updateProfile() would silently reset threat_domains/severity_floor to their defaults.
+test('PATCH /api/profiles/:id/assets/:vendor/:product does not reset unrelated profile fields', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', {
+      ...REL_PROFILE, threatDomains: ['ransomware'], severityFloor: 'high',
+    });
+    await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '7.4.5', versionState: 'known' });
+
+    const after = await get(app, `/api/profiles/${created.body.id}`);
+    assert.deepStrictEqual(after.body.threat_domains, ['ransomware']);
+    assert.strictEqual(after.body.severity_floor, 'high');
+  } finally { await cleanup(); }
+});
+
+test('PATCH /api/profiles/:id/assets/:vendor/:product returns 404 for an asset the profile does not have', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    const res = await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/microsoft/windows_11_24h2`,
+      { version: '1', versionState: 'known' });
+    assert.strictEqual(res.status, 404);
+  } finally { await cleanup(); }
+});
+
+test('PATCH /api/profiles/:id/assets/:vendor/:product returns 404 for a non-integer profile id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await send(createApp(store), 'PATCH', '/api/profiles/abc/assets/fortinet/fortios', { version: '1' });
+    assert.strictEqual(res.status, 404);
+  } finally { await cleanup(); }
+});
+
+// The cross-item effect, proven end to end rather than assumed: one PATCH must re-derive the
+// status of every item matching the asset, not just the one the caller happened to look at.
+test('recording a version flips remediation status for every open item against the same asset', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const src = (await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id")).id;
+
+    async function seedFortiCve(cveId, endExcluding) {
+      const item = await store.get(
+        `INSERT INTO items (source_id, category, title, external_id, published_at)
+         VALUES ($1,'cve',$2,$2, now()) RETURNING id`, [src, cveId]);
+      await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [item.id]);
+      await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [item.id, cveId]);
+      await store.run(
+        `INSERT INTO cve_intel (cve_id, severity, kev_listed, source_count, affected_versions)
+         VALUES ($1,'high',true,1,$2)`,
+        [cveId, JSON.stringify([{
+          vendor: 'fortinet', product: 'fortios', text: `before ${endExcluding}`,
+          startIncluding: null, startExcluding: null, endIncluding: null, endExcluding, pinned: null,
+        }])]);
+      return item.id;
+    }
+
+    const lowFix = await seedFortiCve('CVE-2026-9001', '7.4.5');
+    const highFix = await seedFortiCve('CVE-2026-9002', '9.0.0');
+
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    // First recording: a version inside both ranges — both items should read affected.
+    await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '7.0.0', versionState: 'known' });
+
+    const lowBefore = await get(app, `/api/items/${lowFix}/remediation?profileId=${created.body.id}`);
+    const highBefore = await get(app, `/api/items/${highFix}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(lowBefore.body.remediation.status, 'affected');
+    assert.strictEqual(highBefore.body.remediation.status, 'affected');
+
+    // Recording an upgrade past the lower fix version: CVE-9001 must flip to not_covered while
+    // CVE-9002 (fixed at a still-higher version) stays affected.
+    await send(app, 'PATCH', `/api/profiles/${created.body.id}/assets/fortinet/fortios`,
+      { version: '8.0.0', versionState: 'known' });
+
+    const lowAfter = await get(app, `/api/items/${lowFix}/remediation?profileId=${created.body.id}`);
+    const highAfter = await get(app, `/api/items/${highFix}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(lowAfter.body.remediation.status, 'not_covered');
+    assert.strictEqual(highAfter.body.remediation.status, 'affected');
+  } finally { await cleanup(); }
+});

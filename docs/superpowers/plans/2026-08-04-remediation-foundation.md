@@ -1673,6 +1673,15 @@ git commit -m "feat(remediation): add GET /api/items/:id/remediation detail rout
 
 **Important implementation gotcha, found while researching this task:** `profiles.getProfile()` returns the raw `profiles` table row — snake_case columns (`threat_domains`, `severity_floor`). `profiles.updateProfile(store, id, input)` calls `validateProfile(input)`, which reads **camelCase** (`input.threatDomains`, `input.severityFloor`). Spreading the fetched profile row directly into `updateProfile` (`{ ...profile, assets: nextAssets }`) would silently read `threatDomains`/`severityFloor` as `undefined`, and `validateProfile` defaults those to `[]`/`'medium'` — **silently wiping the profile's threat domains and severity floor on every version PATCH.** The implementation below maps the row's snake_case fields to `validateProfile`'s camelCase input explicitly, and Step 1 includes a test that would catch a regression back to the naive spread.
 
+**Correction made during execution (required, caught in coordinator review):** the draft below built `versionState` as `req.body.versionState ?? 'unset'`. That is a real defect: `PATCH {"version":"7.4.5"}` with no explicit `versionState` would store the version under `'unset'`, and `remediationFor` only reads `asset.version` when `versionState === 'known'` — so the write would 200 and then be silently ignored by every status computation, the exact reassuring-direction failure this whole feature exists to prevent. Fixed by deriving the state from the body instead of defaulting it flat: an explicit `versionState` in the body always wins; otherwise a non-empty `version` implies `'known'`, and an absent/null `version` implies `'unknown'` (the reader was asked, via this very PATCH, and said "I don't know") — `'unset'` is never reachable through this route, because `'unset'` means "never asked," and a PATCH to this endpoint is proof someone was:
+
+```js
+const version = req.body.version ?? null;
+const versionState = req.body.versionState ?? (version ? 'known' : 'unknown');
+```
+
+Three tests were added to Step 1 to cover this: a bare `{"version":"7.4.5"}` reads back `versionState: 'known'` and actually changes a real item's remediation status (not just the field); a bare `{}` reads back `version: null, versionState: 'unknown'`; and an explicit `versionState` in the body overrides the inference either way.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `server/api.test.js`:

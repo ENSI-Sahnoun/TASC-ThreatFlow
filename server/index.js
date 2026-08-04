@@ -283,6 +283,59 @@ function createApp(store) {
     });
   }));
 
+  // Records a version on one asset. Goes through profiles.updateProfile's own transaction (it
+  // deletes and rewrites the whole asset set on every save) rather than a bespoke single-row
+  // UPDATE — a direct UPDATE would be silently discarded by the next profile save, and
+  // duplicating the version-bump/recompute logic in a second place is how the two drift apart.
+  app.patch('/api/profiles/:id/assets/:vendor/:product', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+
+    const { vendor, product } = req.params;
+    const idx = (profile.assets || []).findIndex((a) => a.vendor === vendor && a.product === product);
+    if (idx === -1) return res.status(404).json({ error: 'not found' });
+
+    // An explicit versionState always wins. Otherwise it's inferred from whether a version was
+    // actually given — never defaulted to 'unset', because 'unset' means "never asked", and a
+    // PATCH to this endpoint is proof someone was. A version with no state would otherwise be
+    // stored and then silently ignored: remediationFor only reads asset.version when
+    // versionState === 'known', so a bare {"version":"7.4.5"} would 200 and change nothing —
+    // exactly the reassuring-direction failure this feature exists to avoid.
+    const version = req.body.version ?? null;
+    const versionState = req.body.versionState ?? (version ? 'known' : 'unknown');
+
+    const nextAssets = profile.assets.map((a, i) => (i === idx ? { ...a, version, versionState } : a));
+
+    // getProfile() returns the raw `profiles` row (snake_case: threat_domains, severity_floor).
+    // validateProfile()/updateProfile() read camelCase input. Mapped explicitly here — a plain
+    // { ...profile, assets: nextAssets } spread would leave threatDomains/severityFloor
+    // undefined and validateProfile would silently default them to []/'medium', wiping both
+    // on every version write.
+    const input = {
+      name: profile.name, sector: profile.sector, vendors: profile.vendors, products: profile.products,
+      threatDomains: profile.threat_domains, region: profile.region, severityFloor: profile.severity_floor,
+      assets: nextAssets,
+    };
+
+    let updated;
+    try {
+      updated = await profiles.updateProfile(store, id, input);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (!updated) return res.status(404).json({ error: 'not found' });
+
+    // Synchronous, unlike PUT /api/profiles/:id's background recompute: the whole point of this
+    // route (Spec B) is that the caller immediately asks "what did that change?", so the
+    // response must reflect the new profile_version's verdicts, not the stale ones. The
+    // recompute is ~1.3s over the full corpus — not an optimization to skip, per the spec.
+    await recomputeProfile(store, updated.id);
+
+    const savedAsset = updated.assets.find((a) => a.vendor === vendor && a.product === product);
+    res.json(savedAsset);
+  }));
+
   app.get('/api/sources', h(async (req, res) => {
     // item_count backs the Arsenal index card grid — one aggregate query for all 43 sources
     // rather than a per-source stats call each.
