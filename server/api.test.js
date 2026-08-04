@@ -1040,7 +1040,7 @@ test('GET /api/items/:id/remediation returns remediationFor output plus relevanc
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.item.id, hitId);
     assert.ok(res.body.relevance);
-    assert.ok(Array.isArray(res.body.playbook));
+    assert.ok(Array.isArray(res.body.playbook.steps));
     assert.strictEqual(res.body.remediation.fix.kind, 'version');
     assert.strictEqual(res.body.remediation.fix.value, '7.4.5');
     assert.strictEqual(res.body.remediation.status, 'unknown');
@@ -1255,5 +1255,128 @@ test('recording a version flips remediation status for every open item against t
     const highAfter = await get(app, `/api/items/${highFix}/remediation?profileId=${created.body.id}`);
     assert.strictEqual(lowAfter.body.remediation.status, 'not_covered');
     assert.strictEqual(highAfter.body.remediation.status, 'affected');
+  } finally { await cleanup(); }
+});
+
+// --- Remediation experience (Spec B): additive fields the frontend needs ---
+
+test('GET /api/profiles/:id/remediation surfaces each item\'s KEV due date', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run("UPDATE cve_intel SET kev_due_date = '2026-08-17' WHERE cve_id = 'CVE-2026-1'");
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    assert.strictEqual(res.status, 200);
+    const item = res.body[0].items.find((i) => i.itemId === hitId);
+    assert.strictEqual(item.dueDate, '2026-08-17');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation reports dueDate: null when the item has no KEV due date', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    const item = res.body[0].items.find((i) => i.itemId === hitId);
+    assert.strictEqual(item.dueDate, null);
+  } finally { await cleanup(); }
+});
+
+// Finding 3's resolution: patchUrl travels alongside fix (never inside it), so a kind: 'version'
+// fix (endExcluding-driven) can still be shown next to the vendor's patch link.
+test('GET /api/profiles/:id/remediation surfaces patchUrl alongside fix, even when fix.kind is version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      `UPDATE cve_intel SET patch_url = 'https://example.com/patch', affected_versions = $1 WHERE cve_id = 'CVE-2026-1'`,
+      [JSON.stringify([{
+        vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '7.4.5', pinned: null,
+      }])]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    const item = res.body[0].items.find((i) => i.itemId === hitId);
+    assert.strictEqual(item.fix.kind, 'version');
+    assert.strictEqual(item.patchUrl, 'https://example.com/patch');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation includes the matched asset\'s vendor/product/exposure', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.asset, { vendor: 'fortinet', product: 'fortios', exposure: 'unknown' });
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation reports asset: null when no profile_assets row matches', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    const res = await get(app, `/api/items/${missId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.asset, null);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation surfaces patchUrl at the top level, even when fix.kind is version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      `UPDATE cve_intel SET patch_url = 'https://example.com/patch', affected_versions = $1 WHERE cve_id = 'CVE-2026-1'`,
+      [JSON.stringify([{
+        vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '7.4.5', pinned: null,
+      }])]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.remediation.fix.kind, 'version');
+    assert.strictEqual(res.body.patchUrl, 'https://example.com/patch');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation returns playbook as { steps, done }, carrying already-ticked steps', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    // Tick a step through the existing playbook-step route before reading remediation detail.
+    const before = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    const firstKey = before.body.playbook.steps[0].key;
+    await send(app, 'POST', `/api/items/${hitId}/playbook/steps/${firstKey}`, null,
+      { 'X-Profile-Id': String(created.body.id) });
+
+    const res = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.playbook.steps));
+    assert.deepStrictEqual(res.body.playbook.done, [firstKey]);
   } finally { await cleanup(); }
 });

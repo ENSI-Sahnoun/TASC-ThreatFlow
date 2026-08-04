@@ -203,7 +203,7 @@ function createApp(store) {
 
     const rows = await store.all(`
       SELECT pa.vendor, pa.product, pa.exposure, pa.version, pa.version_state AS "versionState",
-             i.id AS "itemId", i.title, ir.tier, ir.score,
+             i.id AS "itemId", i.title, ir.tier, ir.score, ir.consequence,
              ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl",
              ip.steps
         FROM profile_assets pa
@@ -232,7 +232,11 @@ function createApp(store) {
       }
       const asset = { vendor: r.vendor, product: r.product, exposure: r.exposure, version: r.version, versionState: r.versionState };
       const rem = remediationFor(asset, r.affectedVersions || [], { patchUrl: r.patchUrl, advisoryUrl: r.advisoryUrl }, r.steps || []);
-      groups.get(key).items.push({ itemId: r.itemId, title: r.title, tier: r.tier, score: r.score, ...rem });
+      const dueDate = (r.consequence && r.consequence.urgency && r.consequence.urgency.due) || null;
+      groups.get(key).items.push({
+        itemId: r.itemId, title: r.title, tier: r.tier, score: r.score, dueDate,
+        patchUrl: r.patchUrl || null, ...rem,
+      });
     }
     res.json([...groups.values()]);
   }));
@@ -255,6 +259,14 @@ function createApp(store) {
     const pb = await store.get(
       'SELECT steps FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=$3',
       [id, profile.id, profile.profile_version]);
+    // Same query GET /api/items/:id already runs — without it, every reload of the guided page
+    // (Step 2's version submit and Step 4's version-bump confirmation both re-fetch this route)
+    // would render every step as unticked again, even though the rows are still there.
+    const pbDone = pb
+      ? (await store.all(
+          'SELECT step_key FROM playbook_step_state WHERE item_id = $1 AND profile_id = $2',
+          [id, profile.id])).map((r) => r.step_key)
+      : [];
     const ci = await store.get(
       `SELECT ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl"
          FROM item_cves ic JOIN cve_intel ci ON ci.cve_id = ic.cve_id WHERE ic.item_id = $1
@@ -278,8 +290,17 @@ function createApp(store) {
     res.json({
       item,
       relevance: rel ? { tier: rel.tier, matches: rel.matches, consequence: rel.consequence } : null,
-      playbook: pb ? pb.steps : null,
+      playbook: pb ? { steps: pb.steps, done: pbDone } : null,
       remediation,
+      // The asset the reader would write a version onto (Spec B's Step 2/Step 4 forms both PATCH
+      // /api/profiles/:id/assets/:vendor/:product) — the route already resolves this row for
+      // remediationFor above; this just also returns it, since remediation itself carries no
+      // vendor/product (entry.vendor/product only exist when affected_versions matched).
+      asset: asset ? { vendor: asset.vendor, product: asset.product, exposure: asset.exposure } : null,
+      // Sibling of `remediation`, never inside `fix` — `ci` (fetched above for remediationFor's
+      // own cveIntel argument) already carries this. Lets Step 3 show a vendor patch link
+      // beneath a kind: 'version' fix without widening fixTarget's own return shape.
+      patchUrl: (ci && ci.patchUrl) || null,
     });
   }));
 
