@@ -148,3 +148,28 @@ test('the step count stays within the 3-6 range across the guard space', () => {
     assert.ok(steps.length >= 2 && steps.length <= 6, `unexpected step count: ${steps.length}`);
   }
 });
+
+// --- confirm: version specificity ---
+
+test('confirm names the specific affected version range when one matches the asset', () => {
+  const steps = base({
+    affectedVersions: [
+      { vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5' },
+      { vendor: 'fortinet', product: 'forticlient', text: 'before 7.2.0' }, // different product, must not match
+    ],
+  });
+  assert.match(find(steps, 'confirm').detail, /before 7\.4\.5/);
+  assert.match(find(steps, 'confirm').source, /NVD CPE match/);
+});
+
+test('confirm stays generic when affectedVersions has no entry for this vendor/product', () => {
+  const steps = base({ affectedVersions: [{ vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875' }] });
+  assert.doesNotMatch(find(steps, 'confirm').detail, /before/);
+  assert.strictEqual(find(steps, 'confirm').source, 'your profile assets');
+});
+
+test('confirm stays generic when affectedVersions is omitted entirely', () => {
+  const steps = base();
+  // roleFor('fortinet', 'fortios') resolves to 'your VPN and firewall' (server/asset_roles.js).
+  assert.strictEqual(find(steps, 'confirm').detail, 'Affected: your VPN and firewall');
+});
