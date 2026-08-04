@@ -328,6 +328,12 @@ async function applySchema(s = store) {
     -- itself. A playbook step never invents a fix location; these are the only two it may cite.
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS patch_url TEXT;
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS advisory_url TEXT;
+    -- Per-product version ranges lifted from the real NVD row's CPE match data (parseCpe/
+    -- affectedVersionsFrom in consolidate.js). [{vendor, product, text, startIncluding,
+    -- startExcluding, endIncluding, endExcluding, pinned}] — 'text' is the rendered sentence,
+    -- the rest are NVD's own bound fields kept comparable for code. Empty array, not null, when
+    -- the CVE has no parseable version data — see affectedVersionsFrom's own doc comment.
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS affected_versions JSONB;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_vector TEXT;
     -- Deterministic consequence slots, materialized by the same pure pass that writes tier.
     -- Nullable: rows written before this column existed carry NULL until the next recompute.

@@ -3,6 +3,7 @@
 const { clusterItems } = require('./cluster');
 const { computeConfidence } = require('./confidence');
 const { severityFromScore, canonicalSeverity } = require('./cvss');
+const { parseCpe } = require('./cpe');
 
 // CVSS precedence, most authoritative first. NVD is the reference scorer; vendors score
 // their own product's context and legitimately disagree, which is why cve_sources keeps
@@ -73,6 +74,78 @@ function referenceUrlFrom(nvdRow, tag) {
   return match ? match.url : null;
 }
 
+// Formats one CPE match's version bound into a plain-English fragment. Only vulnerable:true
+// matches are ever passed in by affectedVersionsFrom — a "runs on" platform dependency isn't a
+// statement about which version of the affected product itself is unsafe.
+function versionRangeText(match) {
+  const startIncluding = match.versionStartIncluding;
+  const startExcluding = match.versionStartExcluding;
+  const endIncluding = match.versionEndIncluding;
+  const endExcluding = match.versionEndExcluding;
+  const start = startIncluding || startExcluding;
+  const end = endIncluding || endExcluding;
+  if (start && end) {
+    return endIncluding ? `${start} through ${end}` : `${start} up to (not including) ${end}`;
+  }
+  if (end) return endExcluding ? `before ${end}` : `${end} and earlier`;
+  if (start) return startExcluding ? `after ${start}` : `${start} and later`;
+  // No bound fields — fall back to the CPE's own pinned version segment.
+  const version = pinnedVersion(match);
+  return version ? `version ${version}` : null;
+}
+
+// The CPE's own version segment (5th colon field, cpe : 2.3 : part : vendor : product : version
+// : ...), when it isn't the wildcard '*' or the not-applicable '-'.
+function pinnedVersion(match) {
+  const fields = typeof match.criteria === 'string' ? match.criteria.split(':') : [];
+  const version = fields[5];
+  return version && version !== '*' && version !== '-' ? version : null;
+}
+
+// The same facts as versionRangeText, as fields instead of a sentence. versionRangeText is what a
+// reader sees; this is what code compares against a version someone actually runs. Every field is
+// null unless NVD supplied it — this function derives nothing.
+//
+// endExcluding is the only field that names a fixed version. endIncluding says "this and earlier
+// is broken" and names no fix; pinned says "exactly this version is broken" and names no fix
+// either. Any caller turning one of these into an upgrade target would be inventing it.
+function versionBounds(match) {
+  return {
+    startIncluding: match.versionStartIncluding || null,
+    startExcluding: match.versionStartExcluding || null,
+    endIncluding: match.versionEndIncluding || null,
+    endExcluding: match.versionEndExcluding || null,
+    pinned: pinnedVersion(match),
+  };
+}
+
+// One line of text per distinct (vendor, product) the real NVD row calls vulnerable, in the
+// order NVD lists them. Reuses parseCpe so the vendor/product spelling matches item_cpes exactly
+// — this is what buildPlaybook/buildConsequence key their lookup on.
+function affectedVersionsFrom(nvdRow) {
+  if (!nvdRow || !nvdRow.raw_json) return [];
+  let raw;
+  try { raw = JSON.parse(nvdRow.raw_json); } catch { return []; }
+  const out = [];
+  const seen = new Set();
+  for (const config of raw.configurations || []) {
+    for (const node of (config && config.nodes) || []) {
+      for (const match of (node && node.cpeMatch) || []) {
+        if (!match || match.vulnerable !== true) continue;
+        const parsed = parseCpe(match.criteria);
+        if (!parsed) continue;
+        const key = `${parsed.vendor}:${parsed.product}`;
+        if (seen.has(key)) continue;
+        const text = versionRangeText(match);
+        if (!text) continue;
+        seen.add(key);
+        out.push({ vendor: parsed.vendor, product: parsed.product, text, ...versionBounds(match) });
+      }
+    }
+  }
+  return out;
+}
+
 async function rebuildCveIntel(store) {
   const rows = await store.all(
     `SELECT ic.cve_id, i.id AS item_id, i.source_id, i.cvss_score, i.epss_score, i.severity, i.summary,
@@ -93,7 +166,7 @@ async function rebuildCveIntel(store) {
   // round-trips, which is what made consolidate() take minutes instead of seconds.
   const cveIntel = { cveId: [], cvss: [], cvssSource: [], severity: [], epss: [], kevListed: [], kevAddedAt: [],
     kevDueDate: [], kevRequiredAction: [], kevRansomware: [], patchUrl: [], advisoryUrl: [],
-    description: [], firstSeen: [], lastSeen: [], sourceCount: [] };
+    affectedVersions: [], description: [], firstSeen: [], lastSeen: [], sourceCount: [] };
   const cveSources = { cveId: [], itemId: [], sourceId: [], cvss: [], severity: [] };
   // Keyed by item_id so a later CVE group's backfill deterministically wins over an earlier
   // one for the same item — matching the original loop's sequential-overwrite behavior.
@@ -129,6 +202,7 @@ async function rebuildCveIntel(store) {
     const nvdRow = evidence.find((e) => e.source_name === 'NVD CVE API');
     const patchUrl = referenceUrlFrom(nvdRow, PATCH_TAG);
     const advisoryUrl = referenceUrlFrom(nvdRow, ADVISORY_TAG);
+    const affectedVersions = affectedVersionsFrom(nvdRow);
 
     // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
     // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
@@ -165,6 +239,9 @@ async function rebuildCveIntel(store) {
     cveIntel.kevRansomware.push(kevRansomware);
     cveIntel.patchUrl.push(patchUrl);
     cveIntel.advisoryUrl.push(advisoryUrl);
+    // Pre-stringified per element because unnest($n::jsonb[]) binds an array of individually
+    // valid JSON texts — a nested JS array would be bound as a Postgres array, not as jsonb.
+    cveIntel.affectedVersions.push(JSON.stringify(affectedVersions));
     cveIntel.description.push(description);
     cveIntel.firstSeen.push(times.length ? new Date(times[0]) : null);
     cveIntel.lastSeen.push(times.length ? new Date(times[times.length - 1]) : null);
@@ -194,13 +271,13 @@ async function rebuildCveIntel(store) {
       await t.run(
         `INSERT INTO cve_intel (cve_id, cvss_score, cvss_source, severity, epss_score, kev_listed,
                                 kev_added_at, kev_due_date, kev_required_action, kev_ransomware,
-                                patch_url, advisory_url, description, first_seen, last_seen, source_count)
+                                patch_url, advisory_url, affected_versions, description, first_seen, last_seen, source_count)
          SELECT * FROM unnest($1::text[], $2::float8[], $3::text[], $4::text[], $5::float8[],
                               $6::bool[], $7::timestamptz[], $8::date[], $9::text[], $10::bool[],
-                              $11::text[], $12::text[], $13::text[], $14::timestamptz[], $15::timestamptz[], $16::int[])`,
+                              $11::text[], $12::text[], $13::jsonb[], $14::text[], $15::timestamptz[], $16::timestamptz[], $17::int[])`,
         [cveIntel.cveId, cveIntel.cvss, cveIntel.cvssSource, cveIntel.severity, cveIntel.epss,
          cveIntel.kevListed, cveIntel.kevAddedAt, cveIntel.kevDueDate, cveIntel.kevRequiredAction, cveIntel.kevRansomware,
-         cveIntel.patchUrl, cveIntel.advisoryUrl, cveIntel.description, cveIntel.firstSeen, cveIntel.lastSeen, cveIntel.sourceCount]);
+         cveIntel.patchUrl, cveIntel.advisoryUrl, cveIntel.affectedVersions, cveIntel.description, cveIntel.firstSeen, cveIntel.lastSeen, cveIntel.sourceCount]);
     }
 
     if (cveSources.cveId.length) {
@@ -303,4 +380,4 @@ async function consolidate(store) {
   return { cves, clusters, items, pruned };
 }
 
-module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK };
+module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK, versionRangeText, versionBounds, affectedVersionsFrom };

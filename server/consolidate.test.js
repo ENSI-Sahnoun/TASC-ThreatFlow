@@ -1,7 +1,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { makeTempDb } = require('./test-helpers');
-const { consolidate, rebuildCveIntel } = require('./consolidate');
+const { consolidate, rebuildCveIntel, versionRangeText, versionBounds, affectedVersionsFrom } = require('./consolidate');
+
+// Spread into an expectation and override only the field under test, so a test reads as "this
+// bound and nothing else" rather than five lines of null.
+const NO_BOUNDS = { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: null };
 
 async function withTestStore(fn) {
   const { store, cleanup } = await makeTempDb();
@@ -324,5 +328,168 @@ test('reference URLs come only from the real NVD row', async () => {
     await rebuildCveIntel(store);
     const row = await store.get('SELECT patch_url FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7014']);
     assert.strictEqual(row.patch_url, null);
+  });
+});
+
+// --- affected version ranges ---
+
+test('versionRangeText: versionEndExcluding only reads as "before X"', () => {
+  assert.strictEqual(versionRangeText({ versionEndExcluding: '10.0.26100.8875' }), 'before 10.0.26100.8875');
+});
+
+test('versionRangeText: versionEndIncluding only reads as "X and earlier"', () => {
+  assert.strictEqual(versionRangeText({ versionEndIncluding: '2.4.1' }), '2.4.1 and earlier');
+});
+
+test('versionRangeText: versionStartIncluding only reads as "X and later"', () => {
+  assert.strictEqual(versionRangeText({ versionStartIncluding: '3.0.0' }), '3.0.0 and later');
+});
+
+test('versionRangeText: versionStartExcluding only reads as "after X"', () => {
+  assert.strictEqual(versionRangeText({ versionStartExcluding: '1.0.0' }), 'after 1.0.0');
+});
+
+test('versionRangeText: start + inclusive end reads as "X through Y"', () => {
+  assert.strictEqual(
+    versionRangeText({ versionStartIncluding: '1.0.0', versionEndIncluding: '1.5.0' }),
+    '1.0.0 through 1.5.0');
+});
+
+test('versionRangeText: start + exclusive end reads as "X up to (not including) Y"', () => {
+  assert.strictEqual(
+    versionRangeText({ versionStartIncluding: '1.0.0', versionEndExcluding: '2.0.0' }),
+    '1.0.0 up to (not including) 2.0.0');
+});
+
+test('versionRangeText: no bound fields falls back to the CPE\'s own pinned version segment', () => {
+  assert.strictEqual(
+    versionRangeText({ criteria: 'cpe:2.3:a:acme:widget:4.2.1:*:*:*:*:*:*:*' }),
+    'version 4.2.1');
+});
+
+test('versionRangeText: no bounds and a wildcard version yields null', () => {
+  assert.strictEqual(versionRangeText({ criteria: 'cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*' }), null);
+});
+
+test('versionRangeText: no bounds and no criteria at all yields null', () => {
+  assert.strictEqual(versionRangeText({}), null);
+});
+
+test('versionBounds: each NVD bound field is carried through verbatim', () => {
+  assert.deepStrictEqual(
+    versionBounds({ versionStartIncluding: '1.0.0', versionEndExcluding: '2.0.0' }),
+    { startIncluding: '1.0.0', startExcluding: null, endIncluding: null, endExcluding: '2.0.0', pinned: null });
+});
+
+test('versionBounds: an exact pinned version is reported as pinned, not as a range', () => {
+  assert.deepStrictEqual(
+    versionBounds({ criteria: 'cpe:2.3:a:acme:widget:4.2.1:*:*:*:*:*:*:*' }),
+    { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: '4.2.1' });
+});
+
+test('versionBounds: a wildcard version and no bounds is all-null — nothing is invented', () => {
+  assert.deepStrictEqual(
+    versionBounds({ criteria: 'cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*' }),
+    { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: null });
+});
+
+test('versionBounds: "X and earlier" sets endIncluding and leaves endExcluding null', () => {
+  // endExcluding is the only field that names a fixed version. A caller reading this entry must
+  // find nothing to upgrade to, because NVD said nothing about one.
+  const b = versionBounds({ versionEndIncluding: '2.4.1' });
+  assert.strictEqual(b.endIncluding, '2.4.1');
+  assert.strictEqual(b.endExcluding, null);
+});
+
+test('affectedVersionsFrom: one entry per distinct vendor/product, arch variants deduped', () => {
+  const nvdRow = {
+    raw_json: JSON.stringify({
+      configurations: [{
+        nodes: [{
+          cpeMatch: [
+            { vulnerable: true, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:*:*:*:*:*:*:x64:*', versionEndExcluding: '10.0.26100.8875' },
+            { vulnerable: true, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:*:*:*:*:*:*:arm64:*', versionEndExcluding: '10.0.26100.8875' },
+            { vulnerable: true, criteria: 'cpe:2.3:o:microsoft:windows_10_22h2:*:*:*:*:*:*:x64:*', versionEndExcluding: '10.0.19045.7548' },
+          ],
+        }],
+      }],
+    }),
+  };
+  const result = affectedVersionsFrom(nvdRow);
+  assert.deepStrictEqual(result, [
+    { vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875', ...NO_BOUNDS, endExcluding: '10.0.26100.8875' },
+    { vendor: 'microsoft', product: 'windows_10_22h2', text: 'before 10.0.19045.7548', ...NO_BOUNDS, endExcluding: '10.0.19045.7548' },
+  ]);
+});
+
+test('affectedVersionsFrom: vulnerable:false platform-dependency entries are skipped', () => {
+  const nvdRow = {
+    raw_json: JSON.stringify({
+      configurations: [{
+        nodes: [{
+          cpeMatch: [
+            { vulnerable: false, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:*:*:*:*:*:*:x64:*' },
+            { vulnerable: true, criteria: 'cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*', versionEndExcluding: '4.0' },
+          ],
+        }],
+      }],
+    }),
+  };
+  assert.deepStrictEqual(affectedVersionsFrom(nvdRow),
+    [{ vendor: 'acme', product: 'widget', text: 'before 4.0', ...NO_BOUNDS, endExcluding: '4.0' }]);
+});
+
+test('affectedVersionsFrom: a match with nothing meaningful to say is excluded, not padded with null', () => {
+  const nvdRow = {
+    raw_json: JSON.stringify({
+      configurations: [{ nodes: [{ cpeMatch: [
+        { vulnerable: true, criteria: 'cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*' },
+      ] }] }],
+    }),
+  };
+  assert.deepStrictEqual(affectedVersionsFrom(nvdRow), []);
+});
+
+test('affectedVersionsFrom: no configurations, malformed raw_json, or no row all yield []', () => {
+  assert.deepStrictEqual(affectedVersionsFrom({ raw_json: JSON.stringify({}) }), []);
+  assert.deepStrictEqual(affectedVersionsFrom({ raw_json: 'not json' }), []);
+  assert.deepStrictEqual(affectedVersionsFrom(null), []);
+  assert.deepStrictEqual(affectedVersionsFrom({}), []);
+});
+
+test('rebuildCveIntel writes affected_versions from the real NVD row\'s CPE matches', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, cvss_score, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7020',9.8,'2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [nvd.id, JSON.stringify({
+        configurations: [{ nodes: [{ cpeMatch: [
+          { vulnerable: true, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:*:*:*:*:*:*:x64:*', versionEndExcluding: '10.0.26100.8875' },
+        ] }] }],
+      })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7020']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT affected_versions FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7020']);
+    assert.deepStrictEqual(row.affected_versions, [
+      {
+        vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875',
+        startIncluding: null, startExcluding: null, endIncluding: null,
+        endExcluding: '10.0.26100.8875', pinned: null,
+      },
+    ]);
+  });
+});
+
+test('affected_versions is an empty array when the CVE\'s NVD row has no parseable CPE version data', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await mkItem(store, nvd.id, { cvss: 5.0 });
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7021']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT affected_versions FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7021']);
+    assert.deepStrictEqual(row.affected_versions, []);
   });
 });

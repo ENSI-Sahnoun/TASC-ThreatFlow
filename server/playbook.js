@@ -19,13 +19,16 @@ function targetPhrase(vendor, product) {
   return 'the affected software';
 }
 
-function confirmStep(vendor, product) {
+function confirmStep(vendor, product, affectedVersions) {
   const target = targetPhrase(vendor, product);
+  const match = (affectedVersions || []).find((v) => v.vendor === vendor && v.product === product);
   return {
     key: 'confirm',
     title: 'Check whether you run the affected version',
-    detail: `Affected: ${target}`,
-    source: vendor && product ? 'your profile assets' : 'this item’s CVE match',
+    detail: match ? `Affected: ${target} — ${match.text}` : `Affected: ${target}`,
+    source: match
+      ? 'NVD CPE match (version range)'
+      : (vendor && product ? 'your profile assets' : 'this item’s CVE match'),
     link: null,
   };
 }
@@ -94,14 +97,14 @@ function watchVendorStep() {
 function buildPlaybook({
   vector, exposure = 'unknown', vendor = null, product = null,
   kevListed = false, kevDueDate = null, kevRansomware = false,
-  patchUrl = null, advisoryUrl = null,
+  patchUrl = null, advisoryUrl = null, affectedVersions = [],
 } = {}) {
   // parseVector returns null for anything it cannot read, including v4 vectors — exactly the
   // behaviour wanted here: no metrics means restrict/rotate have nothing to derive from.
   const parsed = vector ? parseVector(vector) : null;
   const metrics = parsed ? parsed.metrics : null;
 
-  const steps = [confirmStep(vendor, product)];
+  const steps = [confirmStep(vendor, product, affectedVersions)];
 
   if (kevRansomware) steps.push(ransomwareStep());
 
