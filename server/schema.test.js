@@ -198,3 +198,23 @@ test('the seed is idempotent and never resurrects a removed asset', async () => 
     assert.deepStrictEqual(await store.all('SELECT * FROM profile_assets'), []);
   } finally { await cleanup(); }
 });
+
+test('cve_intel carries KEV required-action/ransomware and NVD reference columns', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const cols = await store.all(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'cve_intel'
+          AND column_name IN ('kev_required_action','kev_ransomware','patch_url','advisory_url')`);
+    assert.strictEqual(cols.length, 4);
+  } finally { await cleanup(); }
+});
+
+test('cve_intel.kev_ransomware defaults to false', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await store.run(`INSERT INTO cve_intel (cve_id, severity) VALUES ('CVE-2026-1','unknown')`);
+    const row = await store.get('SELECT kev_ransomware FROM cve_intel WHERE cve_id = $1', ['CVE-2026-1']);
+    assert.strictEqual(row.kev_ransomware, false);
+  } finally { await cleanup(); }
+});

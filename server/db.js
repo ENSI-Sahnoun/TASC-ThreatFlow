@@ -292,6 +292,16 @@ async function applySchema(s = store) {
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_due_date DATE;
+    -- CISA's own remediation text and its ransomware flag. requiredAction is usually
+    -- boilerplate ("Apply mitigations per vendor instructions...") — kept as a citation, not
+    -- as step body text. knownRansomwareCampaignUse is the opposite: concrete, binary, and
+    -- worth its own playbook step when true.
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_required_action TEXT;
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_ransomware BOOLEAN NOT NULL DEFAULT false;
+    -- Lifted from the NVD record's own references[], tagged 'Patch' / 'Vendor Advisory' by NVD
+    -- itself. A playbook step never invents a fix location; these are the only two it may cite.
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS patch_url TEXT;
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS advisory_url TEXT;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_vector TEXT;
     -- Deterministic consequence slots, materialized by the same pure pass that writes tier.
     -- Nullable: rows written before this column existed carry NULL until the next recompute.
