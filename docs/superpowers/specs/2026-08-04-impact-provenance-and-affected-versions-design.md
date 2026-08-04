@@ -102,7 +102,7 @@ function versionRangeText(match) {
   const start = versionStartIncluding || versionStartExcluding;
   const end = versionEndIncluding || versionEndExcluding;
   if (start && end) {
-    return `${start} through ${versionEndIncluding ? end : `before ${end}`}`;
+    return versionEndIncluding ? `${start} through ${end}` : `${start} up to (not including) ${end}`;
   }
   if (end) return versionEndExcluding ? `before ${end}` : `${end} and earlier`;
   if (start) return versionStartExcluding ? `after ${start}` : `${start} and later`;
