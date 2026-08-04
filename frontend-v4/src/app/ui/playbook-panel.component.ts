@@ -1,4 +1,5 @@
-import { Component, Input, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { PanelComponent } from './panel.component';
 import { ApiService } from '../core/api.service';
 import { playbookProgress, stepBlocks, groundingFooter } from '../core/playbook';
@@ -15,10 +16,11 @@ import type { Playbook } from '../core/models';
   selector: 'tf-playbook-panel',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelComponent],
+  imports: [PanelComponent, RouterLink],
   template: `
     @if (playbook) {
       <tf-panel title="What to do about this" [subtitle]="subtitle()">
+        <a class="guided-link" [routerLink]="['/remediate', itemId]">Open the guided walkthrough &rarr;</a>
         <ol class="steps">
           @for (s of blocks(); track s.key) {
             <li [class.done]="s.done">
@@ -44,6 +46,12 @@ import type { Playbook } from '../core/models';
     }
   `,
   styles: [`
+    .guided-link {
+      display: inline-block; margin-bottom: 10px; font-size: var(--fs-xs); color: var(--accent);
+      text-decoration: none;
+    }
+    .guided-link:hover { text-decoration: underline; }
+    .guided-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
     .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
     .steps > li { border-left: 2px solid var(--border); padding-left: 10px; }
     .steps > li.done { border-left-color: var(--sev-low, #2a2); opacity: 0.75; }
@@ -62,6 +70,11 @@ export class PlaybookPanelComponent {
 
   @Input() itemId!: number;
   @Input() dueDate: string | null = null;
+
+  // Fired with the NEW done state, right after the optimistic tick — lets the guided page
+  // (Spec B) offer to record a new asset version once the 'patch' step is ticked and the fix was
+  // a named version, without this component needing to know anything about that flow itself.
+  @Output() toggled = new EventEmitter<{ key: string; done: boolean }>();
 
   private _playbook = signal<Playbook | null>(null);
   @Input() set playbook(value: Playbook | null | undefined) {
@@ -101,6 +114,7 @@ export class PlaybookPanelComponent {
     const removed = new Set(opt.removed);
     if (nowDone) { removed.add(key); added.delete(key); } else { added.add(key); removed.delete(key); }
     this.optimistic.set({ added, removed });
+    this.toggled.emit({ key, done: !nowDone });
 
     const call = nowDone ? this.api.untickPlaybookStep(this.itemId, key) : this.api.tickPlaybookStep(this.itemId, key);
     call.subscribe();
