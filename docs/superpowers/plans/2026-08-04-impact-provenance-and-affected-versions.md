@@ -4,6 +4,21 @@
 
 **Goal:** Make the "why" provenance link in the impact panel keyboard/touch-accessible, and make the playbook's confirm step state the specific affected version range instead of a generic "check whether you run the affected version."
 
+> **Amendment, 2026-08-04.** Each `affected_versions` entry now carries the raw bound fields
+> (`startIncluding`/`startExcluding`/`endIncluding`/`endExcluding`/`pinned`) alongside the
+> human-readable `text`. `text` is unchanged and remains what the confirm step renders, so Tasks
+> 3–6 are untouched; only Task 1's implementation and Task 1/2's `deepStrictEqual` expectations
+> change. Reason: a follow-on remediation system has to compare a version the user actually runs
+> against the affected range, and decide what to upgrade to. Re-parsing `"before 7.4.5"` with a
+> regex would be reconstructing data we discarded one function earlier. Storing the fields now
+> costs one object literal; adding them later costs a second migration plus a full
+> `consolidate()` re-run.
+>
+> The bound fields are stored, not yet interpreted. In particular **`endExcluding` is the only
+> field that names a fixed version.** `endIncluding: "2.4.1"` says "≤ 2.4.1 is broken" and says
+> nothing about what is fixed; no downstream code may infer `2.4.2` from it. That rule is
+> enforced where the inference would happen, not here.
+
 **Architecture:** Backend: a new pure `affectedVersionsFrom()` in `server/consolidate.js` reads NVD's `raw_json` CPE match data (already used for `patchUrl`/`advisoryUrl`) and writes a new `cve_intel.affected_versions` JSONB column during the existing `rebuildCveIntel` pass; `relevance.js` threads it through to `playbook.js`'s `confirmStep`. Frontend: `impact-panel.component.ts`'s hover-only `title` tooltip becomes a `<button>` toggling an inline reveal.
 
 **Tech Stack:** Node 22 · Express 4 · PostgreSQL 16 (`node:test`, colocated `*.test.js`, isolated stores via `test-helpers.js`) · Angular 19 standalone components (vitest, no TestBed).
@@ -26,14 +41,18 @@
 
 **Interfaces:**
 - Consumes: `parseCpe(criteria)` from `./cpe.js` — returns `{ part, vendor, product }` (all lowercased) or `null`.
-- Produces: `versionRangeText(match)` — takes one `cpeMatch[]` entry object (`{ criteria, versionStartIncluding?, versionStartExcluding?, versionEndIncluding?, versionEndExcluding? }`), returns a string or `null`. `affectedVersionsFrom(nvdRow)` — takes a row shaped like `{ raw_json }` (same shape `referenceUrlFrom` takes), returns `Array<{ vendor: string, product: string, text: string }>`. Both used by Task 2.
+- Produces: `versionRangeText(match)` — takes one `cpeMatch[]` entry object (`{ criteria, versionStartIncluding?, versionStartExcluding?, versionEndIncluding?, versionEndExcluding? }`), returns a string or `null`. `versionBounds(match)` — takes the same entry, returns `{ startIncluding, startExcluding, endIncluding, endExcluding, pinned }` with every field a string or `null`. `affectedVersionsFrom(nvdRow)` — takes a row shaped like `{ raw_json }` (same shape `referenceUrlFrom` takes), returns `Array<{ vendor, product, text, startIncluding, startExcluding, endIncluding, endExcluding, pinned }>`. All three used by Task 2.
 
 - [ ] **Step 1: Write the failing tests**
 
 Append to `server/consolidate.test.js`:
 
 ```js
-const { versionRangeText, affectedVersionsFrom } = require('./consolidate');
+const { versionRangeText, versionBounds, affectedVersionsFrom } = require('./consolidate');
+
+// Spread into an expectation and override only the field under test, so a test reads as "this
+// bound and nothing else" rather than five lines of null.
+const NO_BOUNDS = { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: null };
 
 test('versionRangeText: versionEndExcluding only reads as "before X"', () => {
   assert.strictEqual(versionRangeText({ versionEndExcluding: '10.0.26100.8875' }), 'before 10.0.26100.8875');
@@ -77,6 +96,32 @@ test('versionRangeText: no bounds and no criteria at all yields null', () => {
   assert.strictEqual(versionRangeText({}), null);
 });
 
+test('versionBounds: each NVD bound field is carried through verbatim', () => {
+  assert.deepStrictEqual(
+    versionBounds({ versionStartIncluding: '1.0.0', versionEndExcluding: '2.0.0' }),
+    { startIncluding: '1.0.0', startExcluding: null, endIncluding: null, endExcluding: '2.0.0', pinned: null });
+});
+
+test('versionBounds: an exact pinned version is reported as pinned, not as a range', () => {
+  assert.deepStrictEqual(
+    versionBounds({ criteria: 'cpe:2.3:a:acme:widget:4.2.1:*:*:*:*:*:*:*' }),
+    { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: '4.2.1' });
+});
+
+test('versionBounds: a wildcard version and no bounds is all-null — nothing is invented', () => {
+  assert.deepStrictEqual(
+    versionBounds({ criteria: 'cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*' }),
+    { startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: null, pinned: null });
+});
+
+test('versionBounds: "X and earlier" sets endIncluding and leaves endExcluding null', () => {
+  // endExcluding is the only field that names a fixed version. A caller reading this entry must
+  // find nothing to upgrade to, because NVD said nothing about one.
+  const b = versionBounds({ versionEndIncluding: '2.4.1' });
+  assert.strictEqual(b.endIncluding, '2.4.1');
+  assert.strictEqual(b.endExcluding, null);
+});
+
 test('affectedVersionsFrom: one entry per distinct vendor/product, arch variants deduped', () => {
   const nvdRow = {
     raw_json: JSON.stringify({
@@ -93,8 +138,8 @@ test('affectedVersionsFrom: one entry per distinct vendor/product, arch variants
   };
   const result = affectedVersionsFrom(nvdRow);
   assert.deepStrictEqual(result, [
-    { vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875' },
-    { vendor: 'microsoft', product: 'windows_10_22h2', text: 'before 10.0.19045.7548' },
+    { vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875', ...NO_BOUNDS, endExcluding: '10.0.26100.8875' },
+    { vendor: 'microsoft', product: 'windows_10_22h2', text: 'before 10.0.19045.7548', ...NO_BOUNDS, endExcluding: '10.0.19045.7548' },
   ]);
 });
 
@@ -111,7 +156,8 @@ test('affectedVersionsFrom: vulnerable:false platform-dependency entries are ski
       }],
     }),
   };
-  assert.deepStrictEqual(affectedVersionsFrom(nvdRow), [{ vendor: 'acme', product: 'widget', text: 'before 4.0' }]);
+  assert.deepStrictEqual(affectedVersionsFrom(nvdRow),
+    [{ vendor: 'acme', product: 'widget', text: 'before 4.0', ...NO_BOUNDS, endExcluding: '4.0' }]);
 });
 
 test('affectedVersionsFrom: a match with nothing meaningful to say is excluded, not padded with null', () => {
@@ -167,12 +213,34 @@ function versionRangeText(match) {
   }
   if (end) return endExcluding ? `before ${end}` : `${end} and earlier`;
   if (start) return startExcluding ? `after ${start}` : `${start} and later`;
-  // No bound fields — fall back to the CPE's own pinned version segment (5th colon field, cpe :
-  // 2.3 : part : vendor : product : version : ...), when it isn't the wildcard '*' or the
-  // not-applicable '-'.
+  // No bound fields — fall back to the CPE's own pinned version segment.
+  const version = pinnedVersion(match);
+  return version ? `version ${version}` : null;
+}
+
+// The CPE's own version segment (5th colon field, cpe : 2.3 : part : vendor : product : version
+// : ...), when it isn't the wildcard '*' or the not-applicable '-'.
+function pinnedVersion(match) {
   const fields = typeof match.criteria === 'string' ? match.criteria.split(':') : [];
   const version = fields[5];
-  return version && version !== '*' && version !== '-' ? `version ${version}` : null;
+  return version && version !== '*' && version !== '-' ? version : null;
+}
+
+// The same facts as versionRangeText, as fields instead of a sentence. versionRangeText is what a
+// reader sees; this is what code compares against a version someone actually runs. Every field is
+// null unless NVD supplied it — this function derives nothing.
+//
+// endExcluding is the only field that names a fixed version. endIncluding says "this and earlier
+// is broken" and names no fix; pinned says "exactly this version is broken" and names no fix
+// either. Any caller turning one of these into an upgrade target would be inventing it.
+function versionBounds(match) {
+  return {
+    startIncluding: match.versionStartIncluding || null,
+    startExcluding: match.versionStartExcluding || null,
+    endIncluding: match.versionEndIncluding || null,
+    endExcluding: match.versionEndExcluding || null,
+    pinned: pinnedVersion(match),
+  };
 }
 
 // One line of text per distinct (vendor, product) the real NVD row calls vulnerable, in the
@@ -195,7 +263,7 @@ function affectedVersionsFrom(nvdRow) {
         const text = versionRangeText(match);
         if (!text) continue;
         seen.add(key);
-        out.push({ vendor: parsed.vendor, product: parsed.product, text });
+        out.push({ vendor: parsed.vendor, product: parsed.product, text, ...versionBounds(match) });
       }
     }
   }
@@ -206,7 +274,7 @@ function affectedVersionsFrom(nvdRow) {
 Update the `module.exports` line at the end of the file:
 
 ```js
-module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK, versionRangeText, affectedVersionsFrom };
+module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK, versionRangeText, versionBounds, affectedVersionsFrom };
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -254,7 +322,11 @@ test('rebuildCveIntel writes affected_versions from the real NVD row\'s CPE matc
     await rebuildCveIntel(store);
     const row = await store.get('SELECT affected_versions FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7020']);
     assert.deepStrictEqual(row.affected_versions, [
-      { vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875' },
+      {
+        vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875',
+        startIncluding: null, startExcluding: null, endIncluding: null,
+        endExcluding: '10.0.26100.8875', pinned: null,
+      },
     ]);
   });
 });
@@ -283,8 +355,10 @@ In `server/db.js`, immediately after the existing line `ALTER TABLE cve_intel AD
 
 ```js
     -- Per-product version ranges lifted from the real NVD row's CPE match data (parseCpe/
-    -- affectedVersionsFrom in consolidate.js). [{vendor, product, text}]; empty array, not null,
-    -- when the CVE has no parseable version data — see affectedVersionsFrom's own doc comment.
+    -- affectedVersionsFrom in consolidate.js). [{vendor, product, text, startIncluding,
+    -- startExcluding, endIncluding, endExcluding, pinned}] — `text` is the rendered sentence,
+    -- the rest are NVD's own bound fields kept comparable for code. Empty array, not null, when
+    -- the CVE has no parseable version data — see affectedVersionsFrom's own doc comment.
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS affected_versions JSONB;
 ```
 

@@ -143,6 +143,15 @@ function affectedVersionsFrom(nvdRow) {
 `parseCpe` is imported from `./cpe.js` (already a sibling module, already used for `item_cpes`) —
 not reimplemented.
 
+**Amendment, 2026-08-04.** Each entry also carries NVD's raw bound fields —
+`startIncluding` / `startExcluding` / `endIncluding` / `endExcluding` / `pinned` — beside `text`.
+`text` is unchanged and remains the only thing the confirm step renders. The fields exist because
+a follow-on remediation system must compare a version the reader actually runs against the
+affected range; recovering `7.4.5` by regex out of `"before 7.4.5"` would be rebuilding data
+discarded one function earlier. Stored, not yet interpreted — and `endExcluding` is the only one
+of them that names a fixed version, so nothing may infer an upgrade target from `endIncluding` or
+`pinned`.
+
 ### Storage: `cve_intel.affected_versions JSONB`
 
 ```sql
