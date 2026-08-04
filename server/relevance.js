@@ -7,6 +7,7 @@
 // path has none.
 const { scoreRelevance } = require('./relevance_score');
 const { buildConsequence } = require('./consequence');
+const { buildPlaybook } = require('./playbook');
 const { getProfile } = require('./profiles');
 
 // 7 params per row; Postgres caps a statement at 65535 bind parameters, so 1000 rows (7000
@@ -22,6 +23,7 @@ async function assembleItems(store) {
            COALESCE(d.domains, '{}') AS domains,
            COALESCE(c.cpes, '[]'::jsonb) AS cpes,
            ci.kev_listed, ci.epss_score, ci.severity AS cve_severity, ci.cvss_score AS cve_cvss,
+           ci.kev_ransomware, ci.patch_url, ci.advisory_url,
            -- As text, never as a Date: pg parses DATE at local midnight, so serializing it
            -- through toISOString() would render CISA's deadline a day early.
            to_char(ci.kev_due_date, 'YYYY-MM-DD') AS kev_due_date
@@ -62,6 +64,9 @@ async function assembleItems(store) {
         epssScore: r.epss_score,
         severity: r.cve_severity,
         cvssScore: r.cve_cvss,
+        knownRansomware: !!r.kev_ransomware,
+        patchUrl: r.patch_url,
+        advisoryUrl: r.advisory_url,
       },
   }));
 }
@@ -73,6 +78,7 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
   const items = await assembleItems(store);
   const tiers = { act_now: 0, watch: 0, low: 0, not_yours: 0 };
   const values = [];
+  const playbookValues = [];
 
   for (const item of items) {
     const { tier, score, matches, exposure } = scoreRelevance(profile, item, now);
@@ -98,6 +104,24 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
     // parsing a `from` string, which is human-facing provenance rather than a data channel.
     values.push([profile.id, item.id, profile.profile_version, tier, score,
       JSON.stringify(matches), JSON.stringify({ ...consequence, exposure })]);
+
+    // Playbooks only for the tiers a user will actually read, and only for an item that is
+    // actually about a CVE — a domain/sector-only watch item has nothing to build a checklist
+    // from. Cheap and pure, so it is materialized in the same pass as consequence.
+    if ((tier === 'act_now' || tier === 'watch') && (item.cve || item.cvssVector)) {
+      const playbookSteps = buildPlaybook({
+        vector: item.cvssVector,
+        exposure,
+        vendor: asset ? asset.vendor : null,
+        product: asset ? asset.product : null,
+        kevListed: !!(item.cve && item.cve.kevListed),
+        kevDueDate: item.cve ? item.cve.kevDueDate : null,
+        kevRansomware: !!(item.cve && item.cve.knownRansomware),
+        patchUrl: item.cve ? item.cve.patchUrl : null,
+        advisoryUrl: item.cve ? item.cve.advisoryUrl : null,
+      });
+      playbookValues.push([profile.id, item.id, profile.profile_version, JSON.stringify(playbookSteps)]);
+    }
   }
 
   await store.tx(async (t) => {
@@ -118,6 +142,22 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
       });
       await t.run(
         `INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches, consequence)
+         VALUES ${tuples.join(',')}`, params);
+    }
+
+    await t.run('DELETE FROM item_playbooks WHERE profile_id = $1 AND profile_version = $2',
+      [profile.id, profile.profile_version]);
+
+    for (let i = 0; i < playbookValues.length; i += INSERT_BATCH) {
+      const chunk = playbookValues.slice(i, i + INSERT_BATCH);
+      const params = [];
+      const tuples = chunk.map((v) => {
+        const base = params.length;
+        params.push(...v);
+        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4}::jsonb)`;
+      });
+      await t.run(
+        `INSERT INTO item_playbooks (profile_id, item_id, profile_version, steps)
          VALUES ${tuples.join(',')}`, params);
     }
   });

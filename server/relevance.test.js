@@ -244,3 +244,104 @@ test('assembleItems exposes the vector and the KEV due date', async () => {
     assert.strictEqual(got.cve.kevDueDate, '2026-08-17');
   } finally { await cleanup(); }
 });
+
+// --- Playbook materialization ---
+
+test('recomputeProfile materializes a playbook for an act_now item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+    const i = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, cvss_vector, published_at)
+       VALUES ($1,'cve','FortiOS RCE','CVE-2026-20',$2, now() - interval '2 days') RETURNING id`,
+      [s.id, WORST]);
+    await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [i.id]);
+    await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-20')", [i.id]);
+    await store.run(
+      `INSERT INTO cve_intel (cve_id, severity, kev_listed, patch_url)
+       VALUES ('CVE-2026-20','critical',true,'https://example.com/patch')`);
+    const p = await createProfile(store, {
+      ...PROFILE_INPUT,
+      assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }],
+    });
+
+    await recomputeProfile(store, p.id);
+
+    const rel = await store.get('SELECT tier FROM item_relevance WHERE item_id=$1 AND profile_id=$2', [i.id, p.id]);
+    assert.strictEqual(rel.tier, 'act_now');
+    const row = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=$3',
+      [i.id, p.id, p.profile_version]);
+    const keys = row.steps.map((st) => st.key);
+    assert.ok(keys.includes('confirm'));
+    assert.ok(keys.includes('patch'));
+    assert.strictEqual(row.steps.find((st) => st.key === 'patch').link, 'https://example.com/patch');
+  } finally { await cleanup(); }
+});
+
+test('a low-tier item gets no item_playbooks row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { domId } = await seed(store);
+    // domId lands on watch by default (followed domain, at floor, recent) — push it to low by
+    // dropping the followed domain from the profile.
+    const p = await createProfile(store, { ...PROFILE_INPUT, threatDomains: [] });
+
+    await recomputeProfile(store, p.id);
+
+    const rel = await store.get('SELECT tier FROM item_relevance WHERE item_id=$1 AND profile_id=$2', [domId, p.id]);
+    assert.strictEqual(rel.tier, 'low');
+    const row = await store.get(
+      'SELECT 1 FROM item_playbooks WHERE item_id=$1 AND profile_id=$2', [domId, p.id]);
+    assert.strictEqual(row, undefined);
+  } finally { await cleanup(); }
+});
+
+test('a watch-tier item with no CVE signal at all gets no item_playbooks row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { domId } = await seed(store);
+    // domId is a news item with a followed domain and no CVE/CVSS anywhere — it reaches watch
+    // through domainMatch, but there is nothing for a playbook to be about.
+    const p = await createProfile(store, PROFILE_INPUT);
+
+    await recomputeProfile(store, p.id);
+
+    const rel = await store.get('SELECT tier FROM item_relevance WHERE item_id=$1 AND profile_id=$2', [domId, p.id]);
+    assert.strictEqual(rel.tier, 'watch');
+    const row = await store.get('SELECT 1 FROM item_playbooks WHERE item_id=$1 AND profile_id=$2', [domId, p.id]);
+    assert.strictEqual(row, undefined);
+  } finally { await cleanup(); }
+});
+
+test('a profile edit regenerates the playbook at the new version and leaves the old one in place', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+    const i = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, cvss_vector, published_at)
+       VALUES ($1,'cve','t','CVE-2026-21',$2, now() - interval '1 days') RETURNING id`, [s.id, WORST]);
+    await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [i.id]);
+    await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-21')", [i.id]);
+    await store.run(`INSERT INTO cve_intel (cve_id, severity, kev_listed) VALUES ('CVE-2026-21','critical',true)`);
+    const p = await createProfile(store, {
+      ...PROFILE_INPUT, assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }],
+    });
+    await recomputeProfile(store, p.id);
+
+    await updateProfile(store, p.id, {
+      ...PROFILE_INPUT, assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internal' }],
+    });
+    await recomputeProfile(store, p.id);
+
+    const v1 = await store.get(
+      'SELECT 1 FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=1', [i.id, p.id]);
+    assert.ok(v1, 'the version-1 playbook survives');
+    const v2 = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=2', [i.id, p.id]);
+    // internal exposure: no longer act_now, no longer carries a restrict step.
+    assert.ok(!v2.steps.some((st) => st.key === 'restrict'));
+  } finally { await cleanup(); }
+});
