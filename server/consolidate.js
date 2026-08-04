@@ -3,6 +3,7 @@
 const { clusterItems } = require('./cluster');
 const { computeConfidence } = require('./confidence');
 const { severityFromScore, canonicalSeverity } = require('./cvss');
+const { parseCpe } = require('./cpe');
 
 // CVSS precedence, most authoritative first. NVD is the reference scorer; vendors score
 // their own product's context and legitimately disagree, which is why cve_sources keeps
@@ -71,6 +72,78 @@ function referenceUrlFrom(nvdRow, tag) {
   const refs = Array.isArray(raw && raw.references) ? raw.references : [];
   const match = refs.find((r) => r && Array.isArray(r.tags) && r.tags.includes(tag) && typeof r.url === 'string');
   return match ? match.url : null;
+}
+
+// Formats one CPE match's version bound into a plain-English fragment. Only vulnerable:true
+// matches are ever passed in by affectedVersionsFrom — a "runs on" platform dependency isn't a
+// statement about which version of the affected product itself is unsafe.
+function versionRangeText(match) {
+  const startIncluding = match.versionStartIncluding;
+  const startExcluding = match.versionStartExcluding;
+  const endIncluding = match.versionEndIncluding;
+  const endExcluding = match.versionEndExcluding;
+  const start = startIncluding || startExcluding;
+  const end = endIncluding || endExcluding;
+  if (start && end) {
+    return endIncluding ? `${start} through ${end}` : `${start} up to (not including) ${end}`;
+  }
+  if (end) return endExcluding ? `before ${end}` : `${end} and earlier`;
+  if (start) return startExcluding ? `after ${start}` : `${start} and later`;
+  // No bound fields — fall back to the CPE's own pinned version segment.
+  const version = pinnedVersion(match);
+  return version ? `version ${version}` : null;
+}
+
+// The CPE's own version segment (5th colon field, cpe : 2.3 : part : vendor : product : version
+// : ...), when it isn't the wildcard '*' or the not-applicable '-'.
+function pinnedVersion(match) {
+  const fields = typeof match.criteria === 'string' ? match.criteria.split(':') : [];
+  const version = fields[5];
+  return version && version !== '*' && version !== '-' ? version : null;
+}
+
+// The same facts as versionRangeText, as fields instead of a sentence. versionRangeText is what a
+// reader sees; this is what code compares against a version someone actually runs. Every field is
+// null unless NVD supplied it — this function derives nothing.
+//
+// endExcluding is the only field that names a fixed version. endIncluding says "this and earlier
+// is broken" and names no fix; pinned says "exactly this version is broken" and names no fix
+// either. Any caller turning one of these into an upgrade target would be inventing it.
+function versionBounds(match) {
+  return {
+    startIncluding: match.versionStartIncluding || null,
+    startExcluding: match.versionStartExcluding || null,
+    endIncluding: match.versionEndIncluding || null,
+    endExcluding: match.versionEndExcluding || null,
+    pinned: pinnedVersion(match),
+  };
+}
+
+// One line of text per distinct (vendor, product) the real NVD row calls vulnerable, in the
+// order NVD lists them. Reuses parseCpe so the vendor/product spelling matches item_cpes exactly
+// — this is what buildPlaybook/buildConsequence key their lookup on.
+function affectedVersionsFrom(nvdRow) {
+  if (!nvdRow || !nvdRow.raw_json) return [];
+  let raw;
+  try { raw = JSON.parse(nvdRow.raw_json); } catch { return []; }
+  const out = [];
+  const seen = new Set();
+  for (const config of raw.configurations || []) {
+    for (const node of (config && config.nodes) || []) {
+      for (const match of (node && node.cpeMatch) || []) {
+        if (!match || match.vulnerable !== true) continue;
+        const parsed = parseCpe(match.criteria);
+        if (!parsed) continue;
+        const key = `${parsed.vendor}:${parsed.product}`;
+        if (seen.has(key)) continue;
+        const text = versionRangeText(match);
+        if (!text) continue;
+        seen.add(key);
+        out.push({ vendor: parsed.vendor, product: parsed.product, text, ...versionBounds(match) });
+      }
+    }
+  }
+  return out;
 }
 
 async function rebuildCveIntel(store) {
@@ -303,4 +376,4 @@ async function consolidate(store) {
   return { cves, clusters, items, pruned };
 }
 
-module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK };
+module.exports = { consolidate, rebuildCveIntel, rebuildClusters, applyConfidence, pruneSyncHistory, SOURCE_RANK, versionRangeText, versionBounds, affectedVersionsFrom };
