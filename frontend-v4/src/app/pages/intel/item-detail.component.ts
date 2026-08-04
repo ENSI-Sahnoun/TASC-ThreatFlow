@@ -5,6 +5,7 @@ import type { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../../core/api.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { ImpactPanelComponent } from '../../ui/impact-panel.component';
+import { PlaybookPanelComponent } from '../../ui/playbook-panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { SourceDotComponent } from '../../ui/source-dot.component';
@@ -28,8 +29,8 @@ interface EntityLink { key: string; label: string; path: string[]; }
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink, PanelComponent, ImpactPanelComponent, EmptyStateComponent, SkeletonComponent, SourceDotComponent,
-    ChipComponent, CopyButtonComponent, BrowserWindowComponent, RecordCardComponent,
+    RouterLink, PanelComponent, ImpactPanelComponent, PlaybookPanelComponent, EmptyStateComponent, SkeletonComponent,
+    SourceDotComponent, ChipComponent, CopyButtonComponent, BrowserWindowComponent, RecordCardComponent,
   ],
   template: `
     @if (detail(); as d) {
@@ -77,6 +78,10 @@ interface EntityLink { key: string; label: string; path: string[]; }
 
       @if (d.relevance; as rel) {
         <tf-impact-panel [relevance]="rel" />
+      }
+
+      @if (d.playbook; as pb) {
+        <tf-playbook-panel [playbook]="pb" [itemId]="d.id" [dueDate]="d.relevance?.consequence?.urgency?.due ?? null" />
       }
 
       <tf-panel title="Entities">
