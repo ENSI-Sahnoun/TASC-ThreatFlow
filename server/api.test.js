@@ -1087,6 +1087,101 @@ test('GET /api/items/:id/remediation returns remediation: null when no asset mat
   } finally { await cleanup(); }
 });
 
+// --- Remediation triage redesign: Part 8's additive fields ---
+
+test('GET /api/profiles/:id/remediation surfaces cvss/kev/source fields from cve_intel and cvssVersion from the item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      "UPDATE cve_intel SET cvss_score = 9.8, kev_due_date = '2026-08-17', kev_ransomware = true WHERE cve_id = 'CVE-2026-1'");
+    await store.run("UPDATE items SET cvss_version = '3.1' WHERE id = $1", [hitId]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    assert.strictEqual(res.status, 200);
+    const item = res.body[0].items.find((i) => i.itemId === hitId);
+    assert.strictEqual(item.cveId, 'CVE-2026-1');
+    assert.strictEqual(item.cvssScore, 9.8);
+    assert.strictEqual(item.cvssVersion, '3.1');
+    assert.strictEqual(item.severity, 'high'); // seedRelevanceFixture's own default
+    assert.strictEqual(item.kevListed, true); // seedRelevanceFixture's own default
+    assert.strictEqual(item.kevDueDate, '2026-08-17');
+    assert.strictEqual(item.kevRansomware, true);
+    assert.strictEqual(item.sourceCount, 1); // seedRelevanceFixture's own default
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation defaults every additive field sanely when the item has no matching cve_intel row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+    // Tier was already assigned by the recompute above (which ran while cve_intel still existed);
+    // deleting it now exercises the live LATERAL join finding nothing, independent of scoring.
+    await store.run("DELETE FROM cve_intel WHERE cve_id = 'CVE-2026-1'");
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    const item = res.body[0].items.find((i) => i.itemId === hitId);
+    assert.strictEqual(item.cveId, null);
+    assert.strictEqual(item.cvssScore, null);
+    assert.strictEqual(item.severity, null);
+    assert.strictEqual(item.kevListed, false);
+    assert.strictEqual(item.kevDueDate, null);
+    assert.strictEqual(item.kevRansomware, false);
+    assert.strictEqual(item.sourceCount, 0);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation surfaces the same eight additive fields at the top level', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      "UPDATE cve_intel SET cvss_score = 9.8, kev_due_date = '2026-08-17', kev_ransomware = true WHERE cve_id = 'CVE-2026-1'");
+    await store.run("UPDATE items SET cvss_version = '3.1' WHERE id = $1", [hitId]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.cveId, 'CVE-2026-1');
+    assert.strictEqual(res.body.cvssScore, 9.8);
+    assert.strictEqual(res.body.cvssVersion, '3.1');
+    assert.strictEqual(res.body.severity, 'high');
+    assert.strictEqual(res.body.kevListed, true);
+    assert.strictEqual(res.body.kevDueDate, '2026-08-17');
+    assert.strictEqual(res.body.kevRansomware, true);
+    assert.strictEqual(res.body.sourceCount, 1);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation defaults every additive field sanely when there is no matching cve_intel row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store); // missId has no item_cves row at all
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    const res = await get(app, `/api/items/${missId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.cveId, null);
+    assert.strictEqual(res.body.cvssScore, null);
+    assert.strictEqual(res.body.severity, null);
+    assert.strictEqual(res.body.kevListed, false);
+    assert.strictEqual(res.body.kevDueDate, null);
+    assert.strictEqual(res.body.kevRansomware, false);
+    assert.strictEqual(res.body.sourceCount, 0);
+    // cvssVersion is items-sourced (Spec Accuracy Finding 1), not cve_intel-sourced, so it is
+    // independently null here too: the news fixture item was seeded with no cvss_version at all.
+    assert.strictEqual(res.body.cvssVersion, null);
+  } finally { await cleanup(); }
+});
+
 // --- Remediation foundation (Spec A): PATCH asset version route ---
 
 test('PATCH /api/profiles/:id/assets/:vendor/:product sets version/versionState and bumps profile_version', async () => {

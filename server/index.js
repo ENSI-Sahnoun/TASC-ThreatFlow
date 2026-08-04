@@ -203,8 +203,11 @@ function createApp(store) {
 
     const rows = await store.all(`
       SELECT pa.vendor, pa.product, pa.exposure, pa.version, pa.version_state AS "versionState",
-             i.id AS "itemId", i.title, ir.tier, ir.score, ir.consequence,
+             i.id AS "itemId", i.title, i.cvss_version AS "cvssVersion", ir.tier, ir.score, ir.consequence,
              ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl",
+             ci.cve_id AS "cveId", ci.cvss_score AS "cvssScore", ci.severity,
+             ci.kev_listed AS "kevListed", to_char(ci.kev_due_date, 'YYYY-MM-DD') AS "kevDueDate", ci.kev_ransomware AS "kevRansomware",
+             ci.source_count AS "sourceCount",
              ip.steps
         FROM profile_assets pa
         JOIN item_cpes c ON c.vendor = pa.vendor AND c.product = pa.product
@@ -235,7 +238,21 @@ function createApp(store) {
       const dueDate = (r.consequence && r.consequence.urgency && r.consequence.urgency.due) || null;
       groups.get(key).items.push({
         itemId: r.itemId, title: r.title, tier: r.tier, score: r.score, dueDate,
-        patchUrl: r.patchUrl || null, ...rem,
+        patchUrl: r.patchUrl || null,
+        // cveId/cvssScore/severity/kev*/sourceCount all come from the same LATERAL cve_intel
+        // join patchUrl already reads — zero new joins. cvssVersion has no home in cve_intel so
+        // it reads the item's own column instead; it may not describe the same source
+        // cvssScore/severity were consolidated from when this item isn't cve_intel's own
+        // tier-winning source for the CVE.
+        cveId: r.cveId || null,
+        cvssScore: r.cvssScore ?? null,
+        cvssVersion: r.cvssVersion || null,
+        severity: r.severity || null,
+        kevListed: !!r.kevListed,
+        kevDueDate: r.kevDueDate || null,
+        kevRansomware: !!r.kevRansomware,
+        sourceCount: r.sourceCount ?? 0,
+        ...rem,
       });
     }
     res.json([...groups.values()]);
@@ -268,7 +285,11 @@ function createApp(store) {
           [id, profile.id])).map((r) => r.step_key)
       : [];
     const ci = await store.get(
-      `SELECT ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl"
+      `SELECT ci.cve_id AS "cveId", ci.affected_versions AS "affectedVersions",
+              ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl",
+              ci.cvss_score AS "cvssScore", ci.severity,
+              ci.kev_listed AS "kevListed", to_char(ci.kev_due_date, 'YYYY-MM-DD') AS "kevDueDate", ci.kev_ransomware AS "kevRansomware",
+              ci.source_count AS "sourceCount"
          FROM item_cves ic JOIN cve_intel ci ON ci.cve_id = ic.cve_id WHERE ic.item_id = $1
         ORDER BY ci.kev_listed DESC, ci.cvss_score DESC NULLS LAST LIMIT 1`, [id]);
 
@@ -301,6 +322,17 @@ function createApp(store) {
       // own cveIntel argument) already carries this. Lets Step 3 show a vendor patch link
       // beneath a kind: 'version' fix without widening fixTarget's own return shape.
       patchUrl: (ci && ci.patchUrl) || null,
+      // Same eight additive fields as the queue route, same reasoning: six from the cve_intel
+      // row already fetched above for remediationFor's own cveIntel argument, cvssVersion from
+      // the item row's own column instead (cve_intel carries no version).
+      cveId: (ci && ci.cveId) || null,
+      cvssScore: (ci && ci.cvssScore) ?? null,
+      cvssVersion: item.cvss_version || null,
+      severity: (ci && ci.severity) || null,
+      kevListed: !!(ci && ci.kevListed),
+      kevDueDate: (ci && ci.kevDueDate) || null,
+      kevRansomware: !!(ci && ci.kevRansomware),
+      sourceCount: (ci && ci.sourceCount) ?? 0,
     });
   }));
 
