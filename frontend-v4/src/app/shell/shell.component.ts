@@ -23,6 +23,7 @@ import { healthPoll } from '../core/health-poll';
         <a routerLink="/" routerLinkActive="on" [routerLinkActiveOptions]="{ exact: true }">Dashboard</a>
         <a routerLink="/arsenal" routerLinkActive="on">Arsenal</a>
         <a routerLink="/intel" routerLinkActive="on">Intel</a>
+        <a routerLink="/remediate" routerLinkActive="on">Remediate</a>
         <a routerLink="/check" routerLinkActive="on">Check URL</a>
       </nav>
       <tf-profile-picker />
