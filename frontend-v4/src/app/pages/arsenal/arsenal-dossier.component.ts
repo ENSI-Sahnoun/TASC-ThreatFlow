@@ -1,9 +1,10 @@
-import { Component, ChangeDetectionStrategy, OnDestroy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, OnDestroy, inject, signal, computed, effect } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
 import { NgTemplateOutlet } from '@angular/common';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
@@ -373,6 +374,7 @@ const HOVER_POPOVER_WIDTH = 280;
 export class ArsenalDossierComponent implements OnDestroy {
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
+  private profileService = inject(ProfileService);
 
   sourceId = NaN;
 
@@ -473,6 +475,16 @@ export class ArsenalDossierComponent implements OnDestroy {
       this.page.set(0);
       this.searchDraft.set('');
       this.loadStats();
+    });
+
+    // Only loadItems() reads a profile-scoped endpoint (GET /api/items?source_id=…) — loadStats()
+    // (GET /api/sources/:id/stats) carries no relevance data and is deliberately not re-fetched
+    // here. Same creation-time-skip guard as explorer/item-detail.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      if (Number.isInteger(this.sourceId) && this.sourceId > 0) this.loadItems();
     });
   }
 

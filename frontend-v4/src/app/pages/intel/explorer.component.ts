@@ -1,7 +1,8 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { SourceDotComponent } from '../../ui/source-dot.component';
@@ -289,6 +290,7 @@ const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
 })
 export class ExplorerComponent {
   private api = inject(ApiService);
+  private profileService = inject(ProfileService);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
 
@@ -352,6 +354,18 @@ export class ExplorerComponent {
     this.api.facets().subscribe({
       next: (f) => this.facets.set(f),
       error: () => { /* filter bar just shows "All" only for Vendor/Region if this fails */ },
+    });
+
+    // /api/items' relevance tier, consequence and row ordering are profile-scoped (index.js's
+    // relJoin/orderBy). A profile switch must invalidate what's already rendered. Guarded so the
+    // effect's own first run — effect() always runs once on creation, same moment the
+    // queryParamMap subscription above already fires its own initial load — doesn't double-fetch.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      this.loadItems();
+      this.loadIocRows();
     });
   }
 

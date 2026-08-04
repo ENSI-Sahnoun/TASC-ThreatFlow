@@ -1,8 +1,9 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { ImpactPanelComponent } from '../../ui/impact-panel.component';
 import { PlaybookPanelComponent } from '../../ui/playbook-panel.component';
@@ -313,6 +314,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
 export class ItemDetailComponent {
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
+  private profileService = inject(ProfileService);
 
   id = NaN;
 
@@ -356,6 +358,16 @@ export class ItemDetailComponent {
       this.related.set([]);
       this.expandedIps.set(new Set());
       this.loadDetail();
+    });
+
+    // GET /api/items/:id's relevance/playbook blocks are profile-scoped. Same guard pattern as
+    // explorer.component.ts: skip the effect's own first (creation-time) run so this doesn't
+    // double-fetch alongside the paramMap subscription above.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      if (Number.isInteger(this.id) && this.id > 0) this.loadDetail();
     });
   }
 
