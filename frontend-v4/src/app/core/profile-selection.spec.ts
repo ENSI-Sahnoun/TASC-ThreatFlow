@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveActiveId, parseStoredId } from './profile-selection';
+import { resolveActiveId, parseStoredId, isProfileChange } from './profile-selection';
 
 const P = (id: number) => ({ id });
 
@@ -32,5 +32,27 @@ describe('parseStoredId', () => {
     for (const bad of [null, '', 'abc', '-1', '0', '1.5', 'NaN']) {
       expect(parseStoredId(bad)).toBeNull();
     }
+  });
+});
+
+describe('isProfileChange', () => {
+  it('is true when selecting a different id', () => {
+    expect(isProfileChange(1, 2)).toBe(true);
+  });
+
+  it('is false when selecting the id that is already active', () => {
+    expect(isProfileChange(3, 3)).toBe(false);
+  });
+
+  it('is false when both are null (no profile, still no profile)', () => {
+    expect(isProfileChange(null, null)).toBe(false);
+  });
+
+  it('is true when clearing an active selection to null', () => {
+    expect(isProfileChange(5, null)).toBe(true);
+  });
+
+  it('is true when selecting a profile from no active selection', () => {
+    expect(isProfileChange(null, 7)).toBe(true);
   });
 });

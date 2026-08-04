@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { ApiService } from './api.service';
-import { resolveActiveId, parseStoredId } from './profile-selection';
+import { resolveActiveId, parseStoredId, isProfileChange } from './profile-selection';
 import type { Profile, ProfilePayload } from './models';
 
 export const ACTIVE_PROFILE_KEY = 'threatflow.activeProfileId';
@@ -17,10 +17,18 @@ export class ProfileService {
   private readonly _profiles = signal<Profile[]>([]);
   private readonly _activeId = signal<number | null>(readStoredId());
   private readonly _loaded = signal(false);
+  private readonly _dataVersion = signal(0);
 
   readonly profiles = this._profiles.asReadonly();
   readonly loaded = this._loaded.asReadonly();
   readonly active = computed(() => this._profiles().find((p) => p.id === this._activeId()) ?? null);
+
+  // Bumped by select() whenever the active profile actually changes. Every page component that
+  // renders profile-scoped data (relevance tier, consequence, playbook) reads this inside an
+  // effect() so a profile switch invalidates what's already on screen. It is a counter rather
+  // than an event so a component created after a switch reads the current number and is correct
+  // without having observed the transition.
+  readonly dataVersion = this._dataVersion.asReadonly();
 
   // Only true once the list has actually arrived — otherwise a slow response would bounce a
   // user who does have profiles straight into onboarding.
@@ -40,11 +48,13 @@ export class ProfileService {
   }
 
   select(id: number | null): void {
+    if (!isProfileChange(this._activeId(), id)) return;
     this._activeId.set(id);
     try {
       if (id == null) localStorage.removeItem(ACTIVE_PROFILE_KEY);
       else localStorage.setItem(ACTIVE_PROFILE_KEY, String(id));
     } catch { /* storage unavailable (private mode); selection still works for this session */ }
+    this._dataVersion.update((n) => n + 1);
   }
 
   // The server already recomputes relevance in the background on create/update (~1s, so it

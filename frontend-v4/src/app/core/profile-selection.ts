@@ -16,3 +16,11 @@ export function parseStoredId(raw: string | null): number | null {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+// Whether selecting `next` over `current` is a real change. Selecting the profile that is
+// already active is a no-op — this is what makes ProfileService.load()'s startup call to
+// select(resolveActiveId(...)) safe: without it, every page would double-fetch on first paint
+// (load() always calls select() once even when the resolved id matches what was already stored).
+export function isProfileChange(current: number | null, next: number | null): boolean {
+  return next !== current;
+}
