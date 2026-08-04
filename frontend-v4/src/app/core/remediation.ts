@@ -208,3 +208,99 @@ export function reachDiagram(metrics: Record<string, string> | null | undefined)
     gateAnnotation: uiText ? { text: uiText, from: `UI:${ui}` } : null,
   };
 }
+
+// ---- Step 2 wording: affectedStatus -> what the reader reads ----
+
+export interface AffectedVerdict {
+  headline: string;
+  detail: string;
+}
+
+// Verbatim from the spec: the system never tells anyone they are safe. not_covered is a fact
+// about one range, not a clean bill of health — server/version_compare.js's affectedStatus()
+// already abstains to 'unknown' rather than guess; this is where that abstention becomes
+// language, and the wording is specified here so it cannot drift.
+export function affectedWording(
+  status: 'affected' | 'not_covered' | 'unknown',
+  installed: string | null,
+  rangeText: string | null,
+): AffectedVerdict {
+  if (status === 'affected') {
+    return { headline: 'You are affected.', detail: 'Your build is inside the range.' };
+  }
+  if (status === 'not_covered') {
+    return {
+      headline: 'This range does not cover your build.',
+      detail: 'Not a clean bill of health — confirm against the vendor advisory before treating it as closed.',
+    };
+  }
+  const compare = installed && rangeText ? `${installed} / ${rangeText}` : 'the two versions';
+  return {
+    headline: 'These two can\'t be ordered reliably.',
+    detail: `Compare them yourself: ${compare}`,
+  };
+}
+
+// ---- Step 3 wording: fixTarget -> what the reader reads ----
+
+export interface FixWording {
+  headline: string;
+  detail: string;
+  note: string | null;
+}
+
+// One case per fixTarget kind, no hedging between them. 'version' never carries a note — a
+// vendor patch link is shown alongside a version target as a sibling field (patchUrl, Spec
+// Accuracy Finding 3), rendered by the component, not by this function.
+export function fixWording(fix: RemediationFix): FixWording {
+  switch (fix.kind) {
+    case 'version':
+      return { headline: `Upgrade to ${fix.value} or later`, detail: '', note: null };
+    case 'patch':
+      return { headline: 'Apply the vendor’s fix', detail: 'A fix is published for this vulnerability.', note: fix.value };
+    case 'advisory':
+      return {
+        headline: 'Read the vendor’s guidance',
+        detail: 'No direct patch link is published yet, but the vendor has guidance.',
+        note: fix.value,
+      };
+    case 'none':
+      return { headline: 'No fix has been published for this yet.', detail: '', note: null };
+  }
+}
+
+// ---- the "one upgrade closes N" sentence ----
+
+export function closesWording(closes: UpgradeCloses | null): string | null {
+  return closes ? `one upgrade to ${closes.value} closes ${closes.count} of these` : null;
+}
+
+// ---- Step 4: the version-recorded consequence ----
+
+// Counts items that read something other than not_covered before a version write and read
+// not_covered after it — the reader's own currently-open item is excluded, since the message is
+// about OTHER threats against the same machine, per the spec's exact wording.
+export function countCleared(
+  before: { itemId: number; status: string }[],
+  after: { itemId: number; status: string }[],
+  excludeItemId: number,
+): number {
+  const afterById = new Map(after.map((a) => [a.itemId, a.status]));
+  let n = 0;
+  for (const b of before) {
+    if (b.itemId === excludeItemId) continue;
+    if (b.status !== 'not_covered' && afterById.get(b.itemId) === 'not_covered') n += 1;
+  }
+  return n;
+}
+
+// Generated from the recomputed statuses, never predicted before the write — null when nothing
+// cleared, so nothing is claimed (the spec's own rule: "If the recompute clears nothing, nothing
+// is claimed").
+export function versionRecordedMessage(clearedCount: number): string | null {
+  if (clearedCount <= 0) return null;
+  const plural = clearedCount === 1 ? 'threat' : 'threats';
+  const verb = clearedCount === 1 ? 'is' : 'are';
+  const pronoun = clearedCount === 1 ? 'its' : 'their';
+  return `Recorded. ${clearedCount} other ${plural} against this machine ${verb} no longer inside ${pronoun} affected range.`;
+}

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   isPastDue, formatDueDate, groupHasPastDue, queueSummary, groupProgress, oneUpgradeCloses,
-  parseVectorMetrics, reachDiagram,
+  parseVectorMetrics, reachDiagram, affectedWording, fixWording, closesWording, countCleared,
+  versionRecordedMessage,
 } from './remediation';
-import type { RemediationQueueGroup, RemediationQueueItem } from './models';
+import type { RemediationFix, RemediationQueueGroup, RemediationQueueItem } from './models';
 
 const item = (over: Partial<RemediationQueueItem> = {}): RemediationQueueItem => ({
   itemId: 1, title: 'T', tier: 'act_now', score: 1,
@@ -238,5 +239,104 @@ describe('reachDiagram', () => {
   it('always returns exactly two edges, origin->gate and gate->outcome', () => {
     const d = reachDiagram({ AV: 'N', PR: 'N' });
     expect(d.edges).toEqual([{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }]);
+  });
+});
+
+describe('affectedWording', () => {
+  it('affected: states it plainly', () => {
+    const w = affectedWording('affected', '7.4.0', 'before 7.4.5');
+    expect(w.headline).toBe('You are affected.');
+    expect(w.detail).toBe('Your build is inside the range.');
+  });
+
+  // Load-bearing: the system must never tell anyone they are safe.
+  it('not_covered: never contains the word "safe"', () => {
+    const w = affectedWording('not_covered', '8.0.0', 'before 7.4.5');
+    expect(`${w.headline} ${w.detail}`.toLowerCase()).not.toContain('safe');
+  });
+  it('not_covered: states the range doesn\'t cover the build and says to confirm', () => {
+    const w = affectedWording('not_covered', '8.0.0', 'before 7.4.5');
+    expect(w.headline).toBe('This range does not cover your build.');
+    expect(w.detail).toMatch(/confirm/i);
+  });
+
+  it('unknown: shows the actual values to compare, not a generic message', () => {
+    const w = affectedWording('unknown', 'v7.0', 'before 7.4.5');
+    expect(w.detail).toContain('v7.0');
+    expect(w.detail).toContain('before 7.4.5');
+  });
+  it('unknown: never contains the word "safe" either', () => {
+    const w = affectedWording('unknown', null, null);
+    expect(`${w.headline} ${w.detail}`.toLowerCase()).not.toContain('safe');
+  });
+});
+
+describe('fixWording', () => {
+  it('version: names the target version and nothing else', () => {
+    const fix: RemediationFix = { kind: 'version', value: '7.4.5' };
+    const w = fixWording(fix);
+    expect(w.headline).toBe('Upgrade to 7.4.5 or later');
+    expect(w.note).toBeNull();
+  });
+  it('patch: carries the URL verbatim as the note', () => {
+    const fix: RemediationFix = { kind: 'patch', value: 'https://example.com/patch' };
+    expect(fixWording(fix).note).toBe('https://example.com/patch');
+  });
+  it('advisory: states no direct patch link is published', () => {
+    const fix: RemediationFix = { kind: 'advisory', value: 'https://example.com/advisory' };
+    const w = fixWording(fix);
+    expect(w.detail).toMatch(/no direct patch link/i);
+    expect(w.note).toBe('https://example.com/advisory');
+  });
+  it('none: states the fact plainly, load-bearing wording', () => {
+    const w = fixWording({ kind: 'none' });
+    expect(w.headline).toBe('No fix has been published for this yet.');
+  });
+});
+
+describe('closesWording', () => {
+  it('renders the upgrade-closes-N sentence', () => {
+    expect(closesWording({ value: '7.4.5', count: 3 })).toBe('one upgrade to 7.4.5 closes 3 of these');
+  });
+  it('is null when there is nothing to close', () => {
+    expect(closesWording(null)).toBeNull();
+  });
+});
+
+describe('countCleared', () => {
+  it('counts items that flipped from something else to not_covered', () => {
+    const before = [{ itemId: 1, status: 'affected' }, { itemId: 2, status: 'affected' }];
+    const after = [{ itemId: 1, status: 'not_covered' }, { itemId: 2, status: 'not_covered' }];
+    expect(countCleared(before, after, 0)).toBe(2);
+  });
+  it('excludes the item the reader is currently looking at', () => {
+    const before = [{ itemId: 1, status: 'affected' }, { itemId: 2, status: 'affected' }];
+    const after = [{ itemId: 1, status: 'not_covered' }, { itemId: 2, status: 'not_covered' }];
+    expect(countCleared(before, after, 1)).toBe(1);
+  });
+  it('does not count an item that was already not_covered before the write', () => {
+    const before = [{ itemId: 1, status: 'not_covered' }];
+    const after = [{ itemId: 1, status: 'not_covered' }];
+    expect(countCleared(before, after, 0)).toBe(0);
+  });
+  it('does not count an item that stayed affected', () => {
+    const before = [{ itemId: 1, status: 'affected' }];
+    const after = [{ itemId: 1, status: 'affected' }];
+    expect(countCleared(before, after, 0)).toBe(0);
+  });
+  it('is 0 for empty input', () => {
+    expect(countCleared([], [], 0)).toBe(0);
+  });
+});
+
+describe('versionRecordedMessage', () => {
+  it('is null when nothing cleared — never claims a consequence that didn\'t happen', () => {
+    expect(versionRecordedMessage(0)).toBeNull();
+  });
+  it('singular wording for exactly one cleared threat', () => {
+    expect(versionRecordedMessage(1)).toBe('Recorded. 1 other threat against this machine is no longer inside its affected range.');
+  });
+  it('plural wording for more than one', () => {
+    expect(versionRecordedMessage(2)).toBe('Recorded. 2 other threats against this machine are no longer inside their affected range.');
   });
 });
