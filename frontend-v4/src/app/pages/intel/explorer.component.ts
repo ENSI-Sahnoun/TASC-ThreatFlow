@@ -128,7 +128,7 @@ const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
           </span>
           <span class="threat">
             @if (row.relevance) {
-              <tf-relevance-chip [relevance]="row.relevance" />
+              <tf-relevance-chip [relevance]="row.relevance" [compact]="true" />
             } @else {
               <span class="unrated">—</span>
             }
@@ -220,6 +220,7 @@ const GRID_TEMPLATE = '1fr 120px 100px 92px 60px 56px 116px';
       border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
     }
     .cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .threat { overflow: hidden; }
     .cat-dot {
       display: inline-block; width: 7px; height: 7px; border-radius: 50%;
       background: var(--c); margin-right: 7px; vertical-align: middle;

@@ -19,7 +19,7 @@ import type { Relevance } from '../core/models';
         [class.quiet]="!prominent"
         [style.--c]="color"
         [title]="sentence"
-      >{{ label }}@if (subline) {<span class="sub"> · {{ subline }}</span>}</span>
+      >{{ label }}@if (subline && !compact) {<span class="sub"> · {{ subline }}</span>}</span>
     }
   `,
   styles: [`
@@ -39,10 +39,17 @@ import type { Relevance } from '../core/models';
 })
 export class RelevanceChipComponent {
   @Input() relevance: Relevance | null = null;
+  // Dense lists (the intel table) have no room for the deadline text beside the label — it
+  // pushed the chip past its fixed column width and bled into the next one. The tooltip still
+  // carries it so nothing is lost, just deferred to hover.
+  @Input() compact = false;
 
   get label() { return tierLabel(this.relevance?.tier); }
   get color() { return tierToken(this.relevance?.tier); }
   get prominent() { return tierIsProminent(this.relevance?.tier); }
   get subline() { return tierSubline(this.relevance); }
-  get sentence() { return explanation(this.relevance); }
+  get sentence() {
+    const base = explanation(this.relevance);
+    return this.compact && this.subline ? `${base} (${this.subline})` : base;
+  }
 }
