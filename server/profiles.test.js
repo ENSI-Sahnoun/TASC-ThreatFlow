@@ -145,7 +145,7 @@ test('deleteProfile removes the row and reports whether it existed', async () =>
 
 // --- Assets (Spec A) ---
 
-const ASSET = { vendor: 'fortinet', product: 'fortios', exposure: 'internet' };
+const ASSET = { vendor: 'fortinet', product: 'fortios', exposure: 'internet', version: null, versionState: 'unset' };
 
 async function seedCpe(store, vendor, product) {
   const s = await store.get(
@@ -172,7 +172,7 @@ test('validateProfile defaults a missing exposure to unknown', () => {
 test('validateProfile lowercases asset slugs', () => {
   const r = validateProfile({ ...VALID, assets: [{ vendor: 'FORTINET', product: 'FortiOS' }] });
   assert.deepStrictEqual(r.value.assets[0],
-    { vendor: 'fortinet', product: 'fortios', exposure: 'unknown' });
+    { vendor: 'fortinet', product: 'fortios', exposure: 'unknown', version: null, versionState: 'unset' });
 });
 
 test('validateProfile rejects an unknown exposure', () => {
@@ -200,7 +200,71 @@ test('validateProfile accepts an asset with no vendor', () => {
   const r = validateProfile({ ...VALID, assets: [{ product: 'fortios', exposure: 'internet' }] });
   assert.strictEqual(r.ok, true);
   assert.deepStrictEqual(r.value.assets[0],
-    { vendor: null, product: 'fortios', exposure: 'internet' });
+    { vendor: null, product: 'fortios', exposure: 'internet', version: null, versionState: 'unset' });
+});
+
+// --- Assets: version / versionState (Spec A, foundation) ---
+
+test('validateProfile defaults version to null and versionState to unset', () => {
+  const r = validateProfile({ ...VALID, assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }] });
+  assert.strictEqual(r.value.assets[0].version, null);
+  assert.strictEqual(r.value.assets[0].versionState, 'unset');
+});
+
+test('validateProfile accepts a well-formed version and versionState', () => {
+  const r = validateProfile({ ...VALID,
+    assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet', version: '7.4.5', versionState: 'known' }] });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.value.assets[0].version, '7.4.5');
+  assert.strictEqual(r.value.assets[0].versionState, 'known');
+});
+
+test('validateProfile trims a version string', () => {
+  const r = validateProfile({ ...VALID,
+    assets: [{ vendor: 'fortinet', product: 'fortios', version: ' 7.4.5 ', versionState: 'known' }] });
+  assert.strictEqual(r.value.assets[0].version, '7.4.5');
+});
+
+test('validateProfile rejects a version containing whitespace', () => {
+  const r = validateProfile({ ...VALID,
+    assets: [{ vendor: 'fortinet', product: 'fortios', version: '7.4 5', versionState: 'known' }] });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /version/);
+});
+
+test('validateProfile rejects a version over 64 characters', () => {
+  const r = validateProfile({ ...VALID,
+    assets: [{ vendor: 'fortinet', product: 'fortios', version: 'x'.repeat(65), versionState: 'known' }] });
+  assert.strictEqual(r.ok, false);
+});
+
+test('validateProfile rejects an unknown versionState', () => {
+  const r = validateProfile({ ...VALID,
+    assets: [{ vendor: 'fortinet', product: 'fortios', versionState: 'maybe' }] });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /version state/);
+});
+
+test('createProfile persists version and versionState through writeAssets/attachAssets', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, { ...VALID,
+      assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet', version: '7.4.5', versionState: 'known' }] });
+    const got = await getProfile(store, created.id);
+    assert.strictEqual(got.assets[0].version, '7.4.5');
+    assert.strictEqual(got.assets[0].versionState, 'known');
+  } finally { await cleanup(); }
+});
+
+test('versionState "unknown" (asked, declined) round-trips with a null version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, { ...VALID,
+      assets: [{ vendor: 'fortinet', product: 'fortios', versionState: 'unknown' }] });
+    const got = await getProfile(store, created.id);
+    assert.strictEqual(got.assets[0].version, null);
+    assert.strictEqual(got.assets[0].versionState, 'unknown');
+  } finally { await cleanup(); }
 });
 
 test('createProfile persists assets and getProfile returns them', async () => {
@@ -250,7 +314,7 @@ test('updateProfile replaces the asset set and bumps profile_version', async () 
       ...VALID, assets: [{ vendor: 'microsoft', product: 'windows', exposure: 'internal' }] });
     assert.strictEqual(updated.profile_version, created.profile_version + 1);
     assert.deepStrictEqual((await getProfile(store, created.id)).assets,
-      [{ vendor: 'microsoft', product: 'windows', exposure: 'internal' }]);
+      [{ vendor: 'microsoft', product: 'windows', exposure: 'internal', version: null, versionState: 'unset' }]);
   } finally { await cleanup(); }
 });
 

@@ -130,6 +130,37 @@ test('items.cvss_vector and item_relevance.consequence exist', async () => {
   } finally { await cleanup(); }
 });
 
+test('profile_assets has version and version_state, defaulting to null/unset', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const cols = await store.all(
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'profile_assets'");
+    const byName = Object.fromEntries(cols.map((c) => [c.column_name, c.data_type]));
+    assert.strictEqual(byName.version, 'text');
+    assert.strictEqual(byName.version_state, 'text');
+
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('vs-test','finance') RETURNING id");
+    const row = await store.get(
+      `INSERT INTO profile_assets (profile_id, vendor, product) VALUES ($1,'fortinet','fortios')
+       RETURNING version, version_state`, [p.id]);
+    assert.strictEqual(row.version, null);
+    assert.strictEqual(row.version_state, 'unset');
+  } finally { await cleanup(); }
+});
+
+test('profile_assets rejects an unknown version_state', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('vs-test-2','finance') RETURNING id");
+    await assert.rejects(
+      store.run(
+        `INSERT INTO profile_assets (profile_id, vendor, product, version_state)
+         VALUES ($1,'fortinet','fortios','maybe')`, [p.id]));
+  } finally { await cleanup(); }
+});
+
 test('applySchema seeds profile_assets from legacy products[] at unknown exposure', async () => {
   const { store, cleanup } = await makeTempDb();
   try {

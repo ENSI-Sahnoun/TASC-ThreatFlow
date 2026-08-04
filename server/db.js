@@ -118,6 +118,15 @@ async function applySchema(s = store) {
     );
     CREATE INDEX IF NOT EXISTS idx_profile_assets_product ON profile_assets(vendor, product);
 
+    -- The version a reader told us they run on this asset, and whether they were ever asked.
+    -- Three states, not a nullable string, so a declined question ('unknown') is distinguishable
+    -- from a question never asked ('unset') — collapsing them would make the remediation page
+    -- re-nag on every visit. Never inferred: a missing answer is recorded as missing, the same
+    -- rule 'exposure' already applies by defaulting to 'unknown' rather than to 'internal'.
+    ALTER TABLE profile_assets ADD COLUMN IF NOT EXISTS version TEXT;
+    ALTER TABLE profile_assets ADD COLUMN IF NOT EXISTS version_state TEXT NOT NULL DEFAULT 'unset'
+      CHECK (version_state IN ('unset','known','unknown'));
+
     -- Materialized because sorting 24k rows by tier has to happen in SQL — a page cannot be
     -- sorted by a value that has not been computed. Keyed by profile_version so a profile edit
     -- invalidates verdicts; superseded versions are left orphaned rather than deleted, so

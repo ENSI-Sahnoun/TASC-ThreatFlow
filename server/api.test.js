@@ -785,7 +785,7 @@ test('POST /api/profiles accepts assets and returns them resolved', async () => 
     });
     assert.strictEqual(res.status, 201);
     assert.deepStrictEqual(res.body.assets,
-      [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }]);
+      [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet', version: null, versionState: 'unset' }]);
   } finally { await cleanup(); }
 });
 
@@ -816,7 +816,7 @@ test('PUT /api/profiles/:id replaces the asset set', async () => {
     });
     assert.strictEqual(updated.status, 202);
     assert.deepStrictEqual(updated.body.assets,
-      [{ vendor: 'fortinet', product: 'fortiproxy', exposure: 'internal' }]);
+      [{ vendor: 'fortinet', product: 'fortiproxy', exposure: 'internal', version: null, versionState: 'unset' }]);
   } finally { await cleanup(); }
 });
 

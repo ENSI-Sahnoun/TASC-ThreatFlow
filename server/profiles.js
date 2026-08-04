@@ -25,6 +25,22 @@ function slugList(input, label) {
 }
 
 const EXPOSURES = ['internet', 'internal', 'unknown'];
+const VERSION_STATES = ['unset', 'known', 'unknown'];
+
+// A version is an identifier, not prose: 1-64 chars, no whitespace, no control characters.
+// Trimmed first so surrounding whitespace from a copy-pasted value doesn't fail validation.
+function validVersion(raw) {
+  if (raw == null || raw === '') return { ok: true, value: null };
+  if (typeof raw !== 'string') return { ok: false, error: 'asset version must be a string' };
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 64) {
+    return { ok: false, error: `asset version must be 1-64 characters: ${raw}` };
+  }
+  if (/[\s\x00-\x1f\x7f]/.test(trimmed)) {
+    return { ok: false, error: `asset version must not contain whitespace or control characters: ${raw}` };
+  }
+  return { ok: true, value: trimmed };
+}
 
 // Assets are the precision path: only these can earn act_now, because a vendor-level claim
 // ("we use Microsoft software") is not evidence of exposure to a specific flaw.
@@ -54,10 +70,18 @@ function assetList(input) {
     // survey question the user skipped.
     const exposure = raw.exposure == null ? 'unknown' : raw.exposure;
     if (!EXPOSURES.includes(exposure)) return { ok: false, error: `unknown exposure: ${raw.exposure}` };
+
+    const versionResult = validVersion(raw.version);
+    if (!versionResult.ok) return versionResult;
+    const versionState = raw.versionState == null ? 'unset' : raw.versionState;
+    if (!VERSION_STATES.includes(versionState)) {
+      return { ok: false, error: `unknown version state: ${raw.versionState}` };
+    }
+
     const key = `${vendor}/${product}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ vendor, product, exposure });
+    out.push({ vendor, product, exposure, version: versionResult.value, versionState });
   }
   return { ok: true, value: out };
 }
@@ -104,11 +128,14 @@ async function attachAssets(store, rows) {
   if (!rows.length) return rows;
   const ids = rows.map((r) => r.id);
   const assets = await store.all(
-    `SELECT profile_id, vendor, product, exposure FROM profile_assets
+    `SELECT profile_id, vendor, product, exposure, version, version_state FROM profile_assets
       WHERE profile_id = ANY($1) ORDER BY vendor, product`, [ids]);
   const byProfile = new Map(ids.map((id) => [id, []]));
   for (const a of assets) {
-    byProfile.get(a.profile_id).push({ vendor: a.vendor, product: a.product, exposure: a.exposure });
+    byProfile.get(a.profile_id).push({
+      vendor: a.vendor, product: a.product, exposure: a.exposure,
+      version: a.version, versionState: a.version_state,
+    });
   }
   for (const row of rows) row.assets = byProfile.get(row.id) || [];
   return rows;
@@ -122,18 +149,20 @@ async function writeAssets(t, profileId, assets) {
   for (const a of assets) {
     if (a.vendor) {
       await t.run(
-        `INSERT INTO profile_assets (profile_id, vendor, product, exposure) VALUES ($1,$2,$3,$4)
+        `INSERT INTO profile_assets (profile_id, vendor, product, exposure, version, version_state)
+         VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (profile_id, vendor, product) DO NOTHING`,
-        [profileId, a.vendor, a.product, a.exposure]);
+        [profileId, a.vendor, a.product, a.exposure, a.version, a.versionState]);
       continue;
     }
     await t.run(
       // Casts are required: in an INSERT...SELECT Postgres cannot infer a bare parameter's
       // type from the target column.
-      `INSERT INTO profile_assets (profile_id, vendor, product, exposure)
-       SELECT DISTINCT $1::int, c.vendor, c.product, $3::text FROM item_cpes c WHERE c.product = $2
+      `INSERT INTO profile_assets (profile_id, vendor, product, exposure, version, version_state)
+       SELECT DISTINCT $1::int, c.vendor, c.product, $3::text, $4::text, $5::text
+         FROM item_cpes c WHERE c.product = $2
        ON CONFLICT (profile_id, vendor, product) DO NOTHING`,
-      [profileId, a.product, a.exposure]);
+      [profileId, a.product, a.exposure, a.version, a.versionState]);
   }
 }
 
