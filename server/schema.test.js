@@ -218,3 +218,46 @@ test('cve_intel.kev_ransomware defaults to false', async () => {
     assert.strictEqual(row.kev_ransomware, false);
   } finally { await cleanup(); }
 });
+
+test('item_playbooks exists, keyed like item_relevance, and cascades on profile delete', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+    const i = await store.get(
+      "INSERT INTO items (source_id, category, title) VALUES ($1,'cve','t') RETURNING id", [s.id]);
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('t','finance') RETURNING id");
+    await store.run(
+      `INSERT INTO item_playbooks (profile_id, item_id, profile_version, steps)
+       VALUES ($1,$2,1,'[]'::jsonb)`, [p.id, i.id]);
+    await store.run('DELETE FROM profiles WHERE id = $1', [p.id]);
+    assert.strictEqual((await store.all('SELECT 1 FROM item_playbooks')).length, 0);
+  } finally { await cleanup(); }
+});
+
+test('playbook_step_state has no profile_version column — a tick survives a profile edit', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const cols = await store.all(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'playbook_step_state'`);
+    assert.ok(!cols.some((c) => c.column_name === 'profile_version'));
+    assert.ok(cols.some((c) => c.column_name === 'step_key'));
+  } finally { await cleanup(); }
+});
+
+test('playbook_step_state cascades when its profile or item is deleted', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+    const i = await store.get(
+      "INSERT INTO items (source_id, category, title) VALUES ($1,'cve','t') RETURNING id", [s.id]);
+    const p = await store.get(
+      "INSERT INTO profiles (name, sector) VALUES ('t','finance') RETURNING id");
+    await store.run(
+      `INSERT INTO playbook_step_state (profile_id, item_id, step_key) VALUES ($1,$2,'confirm')`, [p.id, i.id]);
+    await store.run('DELETE FROM items WHERE id = $1', [i.id]);
+    assert.strictEqual((await store.all('SELECT 1 FROM playbook_step_state')).length, 0);
+  } finally { await cleanup(); }
+});

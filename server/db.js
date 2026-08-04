@@ -184,6 +184,32 @@ async function applySchema(s = store) {
       PRIMARY KEY (profile_id, item_id, profile_version)
     );
 
+    -- The generated skeleton. Keyed by profile_version like item_relevance, for the same
+    -- reason: a profile edit can change which steps apply (exposure changes whether "restrict
+    -- access" is relevant), so the cached skeleton must invalidate with it. Disposable — a
+    -- superseded version is left orphaned rather than deleted, same as item_relevance.
+    CREATE TABLE IF NOT EXISTS item_playbooks (
+      profile_id      INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      item_id         INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      profile_version INT NOT NULL,
+      steps           JSONB NOT NULL,
+      worded_by       TEXT,
+      computed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (profile_id, item_id, profile_version)
+    );
+
+    -- What the user ticked. Deliberately NOT keyed by profile_version: "I applied the patch" is
+    -- a statement about the real world, and editing an unrelated profile field must not un-tick
+    -- it. step_key is a stable identifier ('confirm', 'patch', 'restrict', ...), not a
+    -- position, so a step that disappears and later returns finds its tick waiting.
+    CREATE TABLE IF NOT EXISTS playbook_step_state (
+      profile_id INT  NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      item_id    INT  NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      step_key   TEXT NOT NULL,
+      done_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (profile_id, item_id, step_key)
+    );
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,
