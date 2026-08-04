@@ -115,10 +115,13 @@ function scoreRelevance(profile, item, now = new Date()) {
   const atFloor = meetsFloor(severity, floor);
 
   let tier;
-  // An unanswered exposure still reaches act_now: only a positive "this is internal" demotes.
-  // Withholding urgency on an actively-exploited flaw because a survey question was skipped
-  // would fail in the wrong direction.
-  if (assetHit && exposure !== 'internal' && (kev || atLeastHigh) && recent) tier = 'act_now';
+  // Ladder v3: act_now requires exploitation evidence, not just severity. Measured against the
+  // verification profile, severity-alone promotion put 310 items on the top rung with only 1
+  // carrying real evidence of exploitation — "act now" had stopped meaning anything. An
+  // unanswered exposure still reaches act_now on a KEV item: only a positive "this is internal"
+  // demotes it, and withholding urgency on an actively-exploited flaw because a survey question
+  // was skipped would fail in the wrong direction.
+  if (assetHit && exposure !== 'internal' && kev && recent) tier = 'act_now';
   else if (assetHit && (kev || atLeastHigh) && recent) tier = 'watch';
   else if (assetHit) tier = 'watch';
   else if (domainMatch && atFloor && recent) tier = 'watch';

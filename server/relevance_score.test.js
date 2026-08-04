@@ -46,8 +46,18 @@ test('rung 1: asset match on a KEV-listed CVE is act_now', () => {
   assert.strictEqual(tierOf(PROFILE, i), 'act_now');
 });
 
-test('rung 1: asset match on a high-severity recent item is act_now without KEV', () => {
+// Ladder v3: severity alone no longer reaches act_now. The verification profile measured
+// against ladder v2 produced 310 act_now items, of which 1 carried real exploitation
+// evidence — "act now" on 310 items is the vagueness this spec set out to remove, just with
+// better sentences underneath it. Only a KEV listing (or, later, a high EPSS score) proves
+// someone is actually exploiting it.
+test('rung 1: asset match on a high-severity recent item without KEV caps at watch', () => {
   const i = item({ cpes: [{ vendor: 'fortinet', product: 'fortios' }], severity: 'high', cvssScore: 8.1, cvssVersion: '3.1' });
+  assert.strictEqual(tierOf(PROFILE, i), 'watch');
+});
+
+test('rung 1: asset match on a KEV-listed CVE with only a medium severity is still act_now', () => {
+  const i = item({ cpes: [{ vendor: 'fortinet', product: 'fortios' }], cve: { kevListed: true, epssScore: null, severity: 'medium', cvssScore: 5.0 } });
   assert.strictEqual(tierOf(PROFILE, i), 'act_now');
 });
 
@@ -141,9 +151,13 @@ test('an undated item is never treated as recent', () => {
   assert.strictEqual(tierOf(PROFILE, i), 'watch', 'must not reach act_now without a date');
 });
 
-test('consolidated cve_intel severity outranks the per-item value', () => {
+test('consolidated cve_intel severity outranks the per-item value in the match list', () => {
   const i = item({ cpes: [{ vendor: 'fortinet', product: 'fortios' }], severity: 'low', cve: { kevListed: false, epssScore: null, severity: 'critical', cvssScore: 9.8 } });
-  assert.strictEqual(tierOf(PROFILE, i), 'act_now');
+  const r = scoreRelevance(PROFILE, i, NOW);
+  // Not act_now: no KEV, and ladder v3 requires exploitation evidence for the top rung.
+  assert.strictEqual(r.tier, 'watch');
+  assert.ok(r.matches.some((m) => m.kind === 'severity' && m.value === 'critical'),
+    'the consolidated (not the per-item) severity is what drives the match list');
 });
 
 // --- matches and score ---

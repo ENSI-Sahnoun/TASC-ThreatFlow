@@ -328,6 +328,12 @@ async function seedRelevanceFixture(store) {
     `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
      VALUES ($1,'cve','FortiOS RCE','CVE-2026-1','high', now() - interval '2 days') RETURNING id`, [src.id]);
   await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [hit.id]);
+  // Ladder v3: act_now requires exploitation evidence, not just severity — this fixture is used
+  // by several tests that need a genuine act_now row to sort/filter against, so it earns act_now
+  // the same way a real item would: a KEV listing.
+  await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-1')", [hit.id]);
+  await store.run(
+    "INSERT INTO cve_intel (cve_id, severity, kev_listed, source_count) VALUES ('CVE-2026-1','high',true,1)");
   const miss = await store.get(
     `INSERT INTO items (source_id, category, title, external_id, published_at)
      VALUES ($1,'news','Unrelated','N-2', now() - interval '1 day') RETURNING id`, [src.id]);
