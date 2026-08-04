@@ -441,15 +441,33 @@ All profiles, newest first.
 ### `POST /api/profiles`
 
 Creates a profile from the onboarding survey payload:
-`{ name, sector, vendors[], products[], threatDomains[], region, severityFloor }`.
+`{ name, sector, vendors[], products[], threatDomains[], region, severityFloor, assets[] }`.
 
 `201` with the created row. `400` when the sector is unknown, a threat domain is not in
 `GET /api/domains`, the severity floor is not a known severity, a vendor/product entry is not a
-CPE-shaped slug, the name is blank, or the name is already taken.
+CPE-shaped slug, an asset's exposure is not one of the three literals, the name is blank, or the
+name is already taken.
 
 `vendors` and `products` are **CPE slugs** matched against `item_cpes`, lowercased and
 de-duplicated on write. Free text that matches no slug is rejected rather than stored, because
 it could never match an item.
+
+#### `assets[]`
+
+`{ product, exposure, vendor? }` — the precision path. Only an asset can earn `act_now`; the
+legacy `vendors`/`products` arrays are retained but cap at `low`, because "we use Microsoft
+software" is not evidence of exposure to a specific flaw (`microsoft` matches 7519 `item_cpes`
+rows).
+
+- `exposure` is `internet`, `internal`, or `unknown`, defaulting to `unknown`. An unanswered
+  exposure still reaches `act_now` — only a positive `internal` demotes — because withholding
+  urgency on an actively-exploited flaw over a skipped survey question fails the wrong way.
+- `vendor` is **optional**. Omit it and the server resolves it from `item_cpes`, inserting one
+  row per distinct vendor carrying that product slug. A product matching no `item_cpes` row is
+  dropped rather than stored.
+
+Every profile read (`GET /api/profiles`, `GET /api/profiles/:id`, and the create/update
+responses) carries `assets` as an array — `[]` when there are none, never absent.
 
 ### `GET /api/profiles/:id`
 
@@ -486,13 +504,40 @@ no resume or partial-progress logic.
 `GET /api/items` gains a `relevance` field:
 
 ```json
-"relevance": { "tier": "act_now", "matches": [{ "kind": "product", "value": "fortinet fortios" }] }
+"relevance": {
+  "tier": "act_now",
+  "matches": [{ "kind": "product", "value": "fortinet fortios" }],
+  "sentence": null,
+  "exposure": "internet",
+  "consequence": {
+    "reach":   { "text": "anyone on the internet, with no password", "from": "AV:N/PR:N/UI:N + exposure=internet" },
+    "impact":  { "text": "read, change and shut down", "from": "C:H/I:H/A:H" },
+    "role":    { "text": "your VPN and firewall", "from": "asset_roles: fortinet/fortios" },
+    "urgency": { "text": "already used in real attacks", "due": "2026-08-17", "from": "KEV" },
+    "exposure": "internet"
+  }
+}
 ```
 
 - `null` **only** when no `X-Profile-Id` is set.
 - With a profile active, every item carries a tier. An item with no stored row yet (inserted
   between recomputes) is served as `{ "tier": "not_yours", "matches": [] }` — never `null`, and
   never dropped from results.
+
+#### `consequence`
+
+Answers *what would happen*, where `matches` answers *why you*. Deterministic — derived from the
+CVSS vector, the matched asset's exposure and a curated product-to-role map, never from a model.
+
+- **Every one of the four slots is independently nullable.** A `null` slot means the source data
+  did not say, and is rendered as a stated gap rather than a blank. An item with no v3 vector
+  (v4-only feeds, non-CVE news, ransomware.live victim rows) has `reach` and `impact` `null`.
+- `from` is the provenance of the claim, meant for display. It is **not** a data channel — read
+  `exposure` from the field of that name, never by parsing `from`.
+- `urgency.due` is CISA's KEV remediation deadline as a bare `YYYY-MM-DD`, or `null`. It is a
+  real, externally-set date; every other urgency signal here is derived.
+- `consequence` itself is `null` for a row written before the column existed, or for an item the
+  recompute has not reached yet.
 - Tiers, most to least urgent: `act_now`, `watch`, `low`, `not_yours`.
 - `match.kind` is one of `product`, `vendor`, `domain`, `kev`, `sector`, `severity`.
 - Default order with a profile active is tier, then internal score, then recency. Without one it

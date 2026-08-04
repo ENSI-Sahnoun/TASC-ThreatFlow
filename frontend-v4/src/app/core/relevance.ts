@@ -1,4 +1,4 @@
-import type { Relevance, RelevanceMatch } from './models';
+import type { Relevance, RelevanceMatch, ConsequenceSlot } from './models';
 
 // Presentation for the "Possible Threat" verdict. Pure, so it carries the whole spec of what a
 // tier means and what a match sentence reads like, testable without a DOM.
@@ -6,10 +6,12 @@ import type { Relevance, RelevanceMatch } from './models';
 export const TIER_ORDER = ['act_now', 'watch', 'low', 'not_yours'] as const;
 export type Tier = (typeof TIER_ORDER)[number];
 
+// Labels state what to do, not how to feel. "Watch" told a reader nothing — it named no action
+// and implied no deadline, which was half the reason the indicator read as vague.
 const LABELS: Record<string, string> = {
   act_now: 'Act now',
-  watch: 'Watch',
-  low: 'Low',
+  watch: 'Plan a fix',
+  low: 'Background',
   not_yours: 'Not yours',
 };
 
@@ -70,6 +72,69 @@ export function matchSentence(matches: RelevanceMatch[] | null | undefined): str
   if (severity.length) parts.push(`Severity ${severity[0]}.`);
 
   return parts.join(' ');
+}
+
+// Tiers state a deadline, not a mood. The KEV due date is a real, externally-set date and
+// always wins over the generic window; everything else here is derived, so it is the one
+// concrete commitment the app can quote.
+export function tierSubline(relevance: Relevance | null | undefined): string | null {
+  const tier = relevance?.tier;
+  if (tier === 'act_now') {
+    const due = relevance?.consequence?.urgency?.due;
+    return due ? `fix by ${formatDue(due)}` : 'within 48 hours';
+  }
+  if (tier === 'watch') return 'this month';
+  return null;
+}
+
+// A malformed date passes through as itself rather than rendering "Invalid Date" at a user.
+function formatDue(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+// A missing slot is a fact about the source data, so it is stated rather than hidden. Blank
+// space would read as "nothing to worry about", which is not what null means.
+export function slotText(slot: ConsequenceSlot | null | undefined): string {
+  return slot?.text ?? 'not stated in the source data';
+}
+
+export function hasConsequence(relevance: Relevance | null | undefined): boolean {
+  const c = relevance?.consequence;
+  return !!c && !!(c.reach || c.impact || c.role || c.urgency);
+}
+
+export interface ImpactBlock {
+  label: string;
+  text: string;
+  from: string | null;
+  /** True when the source data did not supply this fact, so the UI can style it as a gap. */
+  missing: boolean;
+}
+
+// The four blocks the impact panel renders, in reading order: who, what, what it is, how soon.
+// Built here rather than in the template so the whole spec of the panel is testable without a
+// DOM — this app runs vitest in a node environment with no TestBed by design, so components
+// stay thin bindings over pure functions like this one.
+//
+// Every block is always present. A missing fact renders as a stated gap, because blank space
+// would read as "nothing to worry about", which is not what a null slot means.
+export function impactBlocks(relevance: Relevance | null | undefined): ImpactBlock[] {
+  const c = relevance?.consequence;
+  const block = (label: string, slot: ConsequenceSlot | null | undefined): ImpactBlock => ({
+    label,
+    text: slotText(slot),
+    from: slot?.from ?? null,
+    missing: !slot,
+  });
+  return [
+    block('Who could do it', c?.reach),
+    block('What they could do', c?.impact),
+    block('What that is', c?.role),
+    block('How urgent', c?.urgency),
+  ];
 }
 
 export function relevanceTier(relevance: Relevance | null | undefined): string | null {

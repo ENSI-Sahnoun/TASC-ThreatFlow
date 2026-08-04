@@ -302,6 +302,42 @@ Every failure degrades rather than breaks.
 | No `profile_assets` rows | Legacy `vendorHit` path only; every verdict caps at `low` |
 | Backend unreachable | Existing banner, unchanged |
 
+## Measured after implementation (2026-08-03)
+
+Against the live corpus (12,736 items), with a verification profile carrying three assets:
+`windows_server_2022` (internet), `linux_kernel` (internal), `chrome` (unknown).
+
+| measure | result |
+|---|---|
+| Items with a readable v3 vector after backfill | 7,685 / 12,736 (60%) |
+| `item_cpes` references covered by `asset_roles` | 77.6%, from 64 of 599 distinct pairs |
+| Prominent-tier rows with `reach` and `impact` | 1,396 / 1,412 (98.9%) |
+| Prominent-tier rows with `role` | 1,388 / 1,412 (98.3%) |
+
+### Open finding: `act_now` is too large to be actionable
+
+The verification profile produced **310 `act_now` items, of which exactly 1 carries any
+exploitation evidence** (KEV or EPSS ≥ 0.5). The other 309 reach the top rung through
+`atLeastHigh && recent` — an ordinary high-severity CVE, recent, in software the profile runs.
+
+This is a faithful implementation of the approved ladder, and it is still the wrong outcome:
+"Act now · within 48 hours" on 310 items restores the vagueness this spec set out to remove,
+just with better sentences underneath it. The cause is that the asset path now works: matching
+`linux_kernel` (853 references) or `windows_server_2022` (469) is precise about *what the user
+runs* and says nothing about *whether anyone is attacking it*.
+
+Options, not yet decided:
+
+1. **Require exploitation evidence for `act_now`.** `assetHit && kev && recent` earns the top
+   rung; `assetHit && atLeastHigh && recent` becomes `watch`. Would put ~1–30 items in
+   `act_now` for this profile and move the rest to "Plan a fix", which is what they are.
+2. **Require internet exposure as well**, keeping the KEV path exposure-independent.
+3. **Leave as specified** and rely on intra-tier ordering, accepting that `act_now` is a
+   sizeable queue rather than a short list.
+
+Option 1 matches what the tier label promises. It is a change to an approved decision, so it is
+recorded here rather than made unilaterally.
+
 ## Testing
 
 Pure modules carry the weight, matching the repo's existing structure.

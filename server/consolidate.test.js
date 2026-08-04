@@ -77,6 +77,58 @@ test('rebuildCveIntel backfills severity onto item rows that never carried their
   });
 });
 
+// The CISA remediation deadline is the only externally-set date in the corpus. Everything else
+// the impact panel says about urgency is derived; this is stated by the authority itself.
+test('rebuildCveIntel lifts kev_due_date out of the CISA KEV raw record', async () => {
+  await withTestStore(async (store) => {
+    const kev = await mkSource(store, 'CISA Known Exploited Vulnerabilities', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7001','2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [kev.id, JSON.stringify({ cveID: 'CVE-2026-7001', dateAdded: '2026-07-01', dueDate: '2026-07-22' })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7001']);
+
+    await rebuildCveIntel(store);
+    // Read as text, not as a Date. pg parses a DATE column into a JS Date at LOCAL midnight, so
+    // toISOString() shifts it back a day in any positive-offset timezone — a deadline rendered
+    // one day early is worse than none. Every consumer of this column must cast it like this.
+    const row = await store.get(
+      `SELECT to_char(kev_due_date, 'YYYY-MM-DD') AS due FROM cve_intel WHERE cve_id=$1`,
+      ['CVE-2026-7001']);
+    assert.strictEqual(row.due, '2026-07-22');
+  });
+});
+
+test('kev_due_date is null when the KEV record carries no dueDate', async () => {
+  await withTestStore(async (store) => {
+    const kev = await mkSource(store, 'CISA Known Exploited Vulnerabilities', 'Vulnerability Intelligence');
+    const a = await mkItem(store, kev.id, {});
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7002']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT * FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7002']);
+    assert.strictEqual(row.kev_due_date, null);
+  });
+});
+
+// A non-KEV source can be flagged actively_exploited by enrich.js. It must not supply a CISA
+// deadline it never had — same rule kev_added_at already follows.
+test('kev_due_date comes only from the real CISA row', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, exploitation_status, published_at, raw_json)
+       VALUES ($1,'cve','t','actively_exploited','2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [nvd.id, JSON.stringify({ dueDate: '2026-01-01' })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7003']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT * FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7003']);
+    assert.strictEqual(row.kev_listed, true);
+    assert.strictEqual(row.kev_due_date, null);
+  });
+});
+
 test('rebuildCveIntel kev_added_at reflects the CISA KEV item, not any exploited item', async () => {
   await withTestStore(async (store) => {
     const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');

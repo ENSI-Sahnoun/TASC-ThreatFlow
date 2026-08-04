@@ -12,6 +12,49 @@ test('kev marks items actively_exploited with vendor', async () => {
   assert.strictEqual(items[0].native.vendor, 'Acme');
 });
 
+// The catalog is not sorted by dateAdded, so taking a positional slice of it returns an
+// arbitrary window. Before this was fixed the stored 100 rows were all from 2021 while the
+// catalog ran to the present day — the KEV lane, which is the strongest urgency signal the
+// relevance scorer has, was showing a stale sample.
+test('kev takes the newest entries by dateAdded, not a positional slice', async () => {
+  const body = JSON.stringify({
+    vulnerabilities: [
+      { cveID: 'CVE-2021-OLD', dateAdded: '2021-11-03' },
+      { cveID: 'CVE-2026-NEW', dateAdded: '2026-07-01' },
+      { cveID: 'CVE-2023-MID', dateAdded: '2023-04-04' },
+    ],
+  });
+  const source = { url: 'x', requestBody: '2' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
+  const items = await bespoke.kev.fetch(source, ctx);
+  assert.deepStrictEqual(items.map((i) => i.external_id), ['CVE-2026-NEW', 'CVE-2023-MID']);
+});
+
+test('kev entries with no dateAdded sort last rather than being dropped', async () => {
+  const body = JSON.stringify({
+    vulnerabilities: [
+      { cveID: 'CVE-NO-DATE' },
+      { cveID: 'CVE-2026-NEW', dateAdded: '2026-07-01' },
+    ],
+  });
+  const source = { url: 'x', requestBody: '10' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
+  const items = await bespoke.kev.fetch(source, ctx);
+  assert.deepStrictEqual(items.map((i) => i.external_id), ['CVE-2026-NEW', 'CVE-NO-DATE']);
+});
+
+// dueDate is the one externally-set deadline in the whole corpus. It is preserved in raw so
+// consolidation can lift it into cve_intel.
+test('kev preserves dueDate in the raw record', async () => {
+  const body = JSON.stringify({
+    vulnerabilities: [{ cveID: 'CVE-2026-1', dateAdded: '2026-07-01', dueDate: '2026-07-22' }],
+  });
+  const source = { url: 'x', requestBody: '10' };
+  const ctx = { request: async () => ({ status: 200, headers: {}, body }) };
+  const items = await bespoke.kev.fetch(source, ctx);
+  assert.strictEqual(items[0].raw.dueDate, '2026-07-22');
+});
+
 test('epss marks high-score CVEs likely', async () => {
   const body = JSON.stringify({ data: [{ cve: 'CVE-2025-5', epss: '0.90', percentile: '0.99', date: '2025-01-01' }] });
   const source = { url: 'x', requestBody: '5' };

@@ -4,6 +4,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../../core/api.service';
 import { PanelComponent } from '../../ui/panel.component';
+import { ImpactPanelComponent } from '../../ui/impact-panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { SourceDotComponent } from '../../ui/source-dot.component';
@@ -27,7 +28,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink, PanelComponent, EmptyStateComponent, SkeletonComponent, SourceDotComponent,
+    RouterLink, PanelComponent, ImpactPanelComponent, EmptyStateComponent, SkeletonComponent, SourceDotComponent,
     ChipComponent, CopyButtonComponent, BrowserWindowComponent, RecordCardComponent,
   ],
   template: `
@@ -75,14 +76,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
       </section>
 
       @if (d.relevance; as rel) {
-        <tf-panel title="Relevance to you" [subtitle]="tierLabel(rel.tier)">
-          <p class="rel-sentence">
-            {{ explanation(rel) }}
-            @if (isModelWritten(rel)) {
-              <span class="ai-tag" title="Written by a local model — the tier itself is decided by deterministic rules, not the model">AI-generated</span>
-            }
-          </p>
-        </tf-panel>
+        <tf-impact-panel [relevance]="rel" />
       }
 
       <tf-panel title="Entities">

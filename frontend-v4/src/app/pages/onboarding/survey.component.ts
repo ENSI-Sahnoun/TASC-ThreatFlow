@@ -3,9 +3,10 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService } from '../../core/api.service';
 import { ProfileService } from '../../core/profile.service';
-import type { Sector, DomainOption, CpeFacet } from '../../core/models';
+import type { Sector, DomainOption, CpeFacet, Exposure } from '../../core/models';
+import { syncAssets, setExposure, type SurveyAsset } from './assets';
 
-// Mandatory first-run survey. Four steps, each mapping to something the relevance scorer can
+// Mandatory first-run survey. Five steps, each mapping to something the relevance scorer can
 // actually match on — there is no question here whose answer has no column behind it.
 //
 // Step 2 is the point of the whole flow: a user who knows nothing picks a sector and accepts
@@ -19,7 +20,7 @@ import type { Sector, DomainOption, CpeFacet } from '../../core/models';
     <div class="survey">
       <header class="head">
         <h1 class="tf-heading">Set up your threat profile</h1>
-        <p class="tagline">Four quick questions. They decide which of the {{ '' }}corpus you see first.</p>
+        <p class="tagline">Five quick questions. They decide which of the {{ '' }}corpus you see first.</p>
         <ol class="steps" aria-label="Progress">
           @for (s of stepLabels; track s; let i = $index) {
             <li [class.done]="step() > i + 1" [class.current]="step() === i + 1">{{ s }}</li>
@@ -69,7 +70,7 @@ import type { Sector, DomainOption, CpeFacet } from '../../core/models';
             </div>
           </div>
           <div class="actions">
-            <button type="button" class="primary" (click)="step.set(4)">Use these</button>
+            <button type="button" class="primary" (click)="goToExposure()">Use these</button>
             <button type="button" class="ghost" (click)="step.set(3)">Customize</button>
           </div>
         </section>
@@ -105,14 +106,53 @@ import type { Sector, DomainOption, CpeFacet } from '../../core/models';
             }
           </div>
           <div class="actions">
-            <button type="button" class="primary" (click)="step.set(4)">Continue</button>
+            <button type="button" class="primary" (click)="goToExposure()">Continue</button>
             <button type="button" class="ghost" (click)="step.set(2)">Back</button>
           </div>
         </section>
       }
 
-      <!-- 4. Interests, name, finish -->
+      <!-- 4. Exposure. One question per product, and the single biggest lever on how personal
+           the verdict can be: AV:N alone is a property of a flaw, AV:N on an internet-facing
+           asset is a statement about this user. -->
       @if (step() === 4) {
+        <section class="panel">
+          <h2>Can these be reached from the internet?</h2>
+          <p class="hint">
+            "Not sure" is a fine answer — it is treated as the worst case, which is safer than a
+            guess.
+          </p>
+          @if (assets().length) {
+            <ul class="exposure">
+              @for (a of assets(); track a.product) {
+                <li>
+                  <span class="prod">{{ a.product }}</span>
+                  <span class="opts">
+                    @for (opt of exposureOptions; track opt.value) {
+                      <button
+                        type="button" class="chip pick"
+                        [class.sel]="a.exposure === opt.value"
+                        [attr.aria-pressed]="a.exposure === opt.value"
+                        (click)="chooseExposure(a.product, opt.value)"
+                      >{{ opt.label }}</button>
+                    }
+                  </span>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p class="hint">No products selected, so there is nothing to answer here.</p>
+          }
+
+          <div class="actions">
+            <button type="button" class="primary" (click)="step.set(5)">Continue</button>
+            <button type="button" class="ghost" (click)="step.set(3)">Back</button>
+          </div>
+        </section>
+      }
+
+      <!-- 5. Interests, name, finish -->
+      @if (step() === 5) {
         <section class="panel">
           <h2>What should we surface?</h2>
           <div class="chips">
@@ -146,7 +186,7 @@ import type { Sector, DomainOption, CpeFacet } from '../../core/models';
             <button type="button" class="primary" [disabled]="!canSubmit || saving()" (click)="submit()">
               {{ saving() ? 'Saving…' : 'Finish' }}
             </button>
-            <button type="button" class="ghost" (click)="step.set(3)">Back</button>
+            <button type="button" class="ghost" (click)="step.set(4)">Back</button>
           </div>
         </section>
       }
@@ -178,6 +218,10 @@ import type { Sector, DomainOption, CpeFacet } from '../../core/models';
     .rec-row { display: flex; gap: 12px; align-items: baseline; }
     .rec-label { min-width: 120px; font-size: var(--fs-xs); color: var(--ink-2); }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .exposure { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+    .exposure li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .exposure .prod { font-size: var(--fs-sm); color: var(--ink); }
+    .exposure .opts { display: flex; gap: 6px; }
     .chip {
       display: inline-flex; align-items: center; gap: 6px;
       font-size: var(--fs-xs); padding: 3px 10px; border-radius: 999px;
@@ -222,10 +266,19 @@ export class SurveyComponent implements OnInit {
   private profileSvc = inject(ProfileService);
   private router = inject(Router);
 
-  readonly stepLabels = ['Sector', 'Recommended', 'Tech', 'Interests'];
+  readonly stepLabels = ['Sector', 'Recommended', 'Tech', 'Exposure', 'Interests'];
   readonly severities = ['critical', 'high', 'medium', 'low'];
 
   readonly step = signal(1);
+  readonly assets = signal<SurveyAsset[]>([]);
+
+  // "Not sure" is offered explicitly rather than left as a skip, because an unanswered exposure
+  // is a real answer the scorer treats as worst-case — the user should be able to say it.
+  readonly exposureOptions: { value: Exposure; label: string }[] = [
+    { value: 'internet', label: 'Yes' },
+    { value: 'internal', label: 'No' },
+    { value: 'unknown', label: 'Not sure' },
+  ];
   readonly sectors = signal<Sector[]>([]);
   readonly domains = signal<DomainOption[]>([]);
   readonly sector = signal<Sector | null>(null);
@@ -291,6 +344,17 @@ export class SurveyComponent implements OnInit {
   removeVendor(v: string): void { this.vendors.update((l) => l.filter((x) => x !== v)); }
   removeProduct(p: string): void { this.products.update((l) => l.filter((x) => x !== p)); }
 
+  // Assets are synced on the way into the exposure step rather than derived from products(),
+  // so an answer survives the user going back to edit their product list.
+  goToExposure(): void {
+    this.assets.update((existing) => syncAssets(this.products(), existing));
+    this.step.set(4);
+  }
+
+  chooseExposure(product: string, exposure: Exposure): void {
+    this.assets.update((list) => setExposure(list, product, exposure));
+  }
+
   isDomainOn(slug: string): boolean { return this.threatDomains().includes(slug); }
 
   toggleDomain(slug: string): void {
@@ -311,6 +375,9 @@ export class SurveyComponent implements OnInit {
         threatDomains: this.threatDomains(),
         region: this.region.trim() || null,
         severityFloor: this.severityFloor,
+        // products[] is still sent: it keeps feeding the low tier for anything the asset path
+        // misses, and keeps an older backend working unchanged.
+        assets: this.assets(),
       },
       () => { this.saving.set(false); this.router.navigateByUrl('/'); },
       // Without this a rejected name (duplicate, or a slug the backend refuses) would leave

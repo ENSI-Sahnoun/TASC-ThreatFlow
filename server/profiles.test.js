@@ -142,3 +142,143 @@ test('deleteProfile removes the row and reports whether it existed', async () =>
     assert.strictEqual(await deleteProfile(store, p.id), false);
   } finally { await cleanup(); }
 });
+
+// --- Assets (Spec A) ---
+
+const ASSET = { vendor: 'fortinet', product: 'fortios', exposure: 'internet' };
+
+async function seedCpe(store, vendor, product) {
+  const s = await store.get(
+    "INSERT INTO sources (name, url, fetch_kind) VALUES ('s','http://x','rss') RETURNING id");
+  const i = await store.get(
+    "INSERT INTO items (source_id, external_id, title, category) VALUES ($1,$2,'t','cve') RETURNING id",
+    [s.id, `e-${vendor}-${product}`]);
+  await store.run(
+    "INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a',$2,$3)",
+    [i.id, vendor, product]);
+}
+
+test('validateProfile accepts well-formed assets', () => {
+  const r = validateProfile({ ...VALID, assets: [ASSET] });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.value.assets, [ASSET]);
+});
+
+test('validateProfile defaults a missing exposure to unknown', () => {
+  const r = validateProfile({ ...VALID, assets: [{ vendor: 'fortinet', product: 'fortios' }] });
+  assert.strictEqual(r.value.assets[0].exposure, 'unknown');
+});
+
+test('validateProfile lowercases asset slugs', () => {
+  const r = validateProfile({ ...VALID, assets: [{ vendor: 'FORTINET', product: 'FortiOS' }] });
+  assert.deepStrictEqual(r.value.assets[0],
+    { vendor: 'fortinet', product: 'fortios', exposure: 'unknown' });
+});
+
+test('validateProfile rejects an unknown exposure', () => {
+  const r = validateProfile({ ...VALID, assets: [{ ...ASSET, exposure: 'sometimes' }] });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /exposure/);
+});
+
+test('validateProfile rejects an asset with a non-slug product', () => {
+  assert.strictEqual(validateProfile({ ...VALID, assets: [{ vendor: 'fortinet', product: 'Forti OS!' }] }).ok, false);
+});
+
+test('validateProfile rejects a non-array assets value', () => {
+  assert.strictEqual(validateProfile({ ...VALID, assets: 'fortios' }).ok, false);
+});
+
+test('validateProfile deduplicates assets by vendor and product', () => {
+  const r = validateProfile({ ...VALID, assets: [ASSET, { ...ASSET, exposure: 'internal' }] });
+  assert.strictEqual(r.value.assets.length, 1);
+});
+
+// The client has no vendor to send: CpeFacet is { value, refs } and the survey's products
+// signal is a bare string[]. The server resolves it from item_cpes instead.
+test('validateProfile accepts an asset with no vendor', () => {
+  const r = validateProfile({ ...VALID, assets: [{ product: 'fortios', exposure: 'internet' }] });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.value.assets[0],
+    { vendor: null, product: 'fortios', exposure: 'internet' });
+});
+
+test('createProfile persists assets and getProfile returns them', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, { ...VALID, assets: [ASSET] });
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets, [ASSET]);
+  } finally { await cleanup(); }
+});
+
+test('createProfile resolves an omitted vendor from item_cpes', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpe(store, 'fortinet', 'fortios');
+    const created = await createProfile(store, {
+      ...VALID, assets: [{ product: 'fortios', exposure: 'internet' }] });
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets, [ASSET]);
+  } finally { await cleanup(); }
+});
+
+test('a product under several vendors resolves to one asset per vendor', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await seedCpe(store, 'acme', 'router_os');
+    await seedCpe(store, 'globex', 'router_os');
+    const created = await createProfile(store, {
+      ...VALID, assets: [{ product: 'router_os', exposure: 'internal' }] });
+    const got = await getProfile(store, created.id);
+    assert.deepStrictEqual(got.assets.map((a) => a.vendor), ['acme', 'globex']);
+  } finally { await cleanup(); }
+});
+
+test('an asset whose product matches no item_cpes row is dropped, not stored', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, {
+      ...VALID, assets: [{ product: 'ghost', exposure: 'internet' }] });
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets, []);
+  } finally { await cleanup(); }
+});
+
+test('updateProfile replaces the asset set and bumps profile_version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, { ...VALID, assets: [ASSET] });
+    const updated = await updateProfile(store, created.id, {
+      ...VALID, assets: [{ vendor: 'microsoft', product: 'windows', exposure: 'internal' }] });
+    assert.strictEqual(updated.profile_version, created.profile_version + 1);
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets,
+      [{ vendor: 'microsoft', product: 'windows', exposure: 'internal' }]);
+  } finally { await cleanup(); }
+});
+
+test('updateProfile with no assets clears them', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, { ...VALID, assets: [ASSET] });
+    await updateProfile(store, created.id, { ...VALID });
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets, []);
+  } finally { await cleanup(); }
+});
+
+test('listProfiles attaches assets to every row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    await createProfile(store, { ...VALID, assets: [ASSET] });
+    await createProfile(store, { ...VALID, name: 'Second' });
+    const rows = await listProfiles(store);
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r.assets]));
+    assert.deepStrictEqual(byName['Acme Bank'], [ASSET]);
+    assert.deepStrictEqual(byName.Second, []);
+  } finally { await cleanup(); }
+});
+
+test('a profile saved without assets reads back an empty array, never undefined', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const created = await createProfile(store, VALID);
+    assert.deepStrictEqual((await getProfile(store, created.id)).assets, []);
+  } finally { await cleanup(); }
+});

@@ -337,6 +337,9 @@ async function seedRelevanceFixture(store) {
 const REL_PROFILE = {
   name: 'Rel', sector: 'finance', vendors: ['fortinet'], products: ['fortios'],
   threatDomains: [], severityFloor: 'medium',
+  // Ladder v2: only a profile_assets row can reach act_now or watch. This fixture represents a
+  // profile that actually runs FortiOS, so it carries the asset alongside the legacy arrays.
+  assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'unknown' }],
 };
 
 test('GET /api/items omits relevance when no profile header is sent', async () => {
@@ -714,5 +717,108 @@ test('GET /api/health responds ok', async () => {
     const res = await get(createApp(store), '/api/health');
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body, { ok: true });
+  } finally { await cleanup(); }
+});
+
+// --- Impact indicator (Spec A) ---
+
+const IMPACT_VECTOR = 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H';
+
+test('GET /api/items/:id includes consequence slots for the active profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    // The fixture item has no vector; add one so reach and impact are derivable.
+    await store.run('UPDATE items SET cvss_vector = $1 WHERE id = $2', [IMPACT_VECTOR, hitId]);
+
+    const created = await send(app, 'POST', '/api/profiles', {
+      ...REL_PROFILE, name: 'Consequence',
+      assets: [{ product: 'fortios', exposure: 'internet' }],
+    });
+    assert.strictEqual(created.status, 201);
+    // The create route recomputes in the background; run it synchronously so the read below
+    // is deterministic rather than racing the background job.
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items/${hitId}?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.body.relevance.consequence.reach.text, /anyone on the internet/);
+    assert.strictEqual(res.body.relevance.consequence.impact.text, 'read, change and shut down');
+    assert.strictEqual(res.body.relevance.exposure, 'internet');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items carries consequence on each row', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run('UPDATE items SET cvss_vector = $1 WHERE id = $2', [IMPACT_VECTOR, hitId]);
+    const created = await send(app, 'POST', '/api/profiles', {
+      ...REL_PROFILE, name: 'RowLevel',
+      assets: [{ product: 'fortios', exposure: 'internet' }],
+    });
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items?profileId=${created.body.id}`);
+    const row = res.body.find((r) => r.id === hitId);
+    assert.match(row.relevance.consequence.reach.text, /anyone on the internet/);
+    assert.strictEqual(row.relevance.exposure, 'internet');
+  } finally { await cleanup(); }
+});
+
+test('POST /api/profiles accepts assets and returns them resolved', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const res = await send(app, 'POST', '/api/profiles', {
+      ...REL_PROFILE, name: 'assets-ok',
+      assets: [{ product: 'fortios', exposure: 'internet' }],
+    });
+    assert.strictEqual(res.status, 201);
+    assert.deepStrictEqual(res.body.assets,
+      [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }]);
+  } finally { await cleanup(); }
+});
+
+test('POST /api/profiles rejects an unknown exposure with 400', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await send(createApp(store), 'POST', '/api/profiles', {
+      ...REL_PROFILE, name: 'assets-bad',
+      assets: [{ product: 'fortios', exposure: 'sometimes' }],
+    });
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /exposure/);
+  } finally { await cleanup(); }
+});
+
+test('PUT /api/profiles/:id replaces the asset set', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', {
+      ...REL_PROFILE, name: 'replace-me',
+      assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }],
+    });
+    const updated = await send(app, 'PUT', `/api/profiles/${created.body.id}`, {
+      ...REL_PROFILE, name: 'replace-me',
+      assets: [{ vendor: 'fortinet', product: 'fortiproxy', exposure: 'internal' }],
+    });
+    assert.strictEqual(updated.status, 202);
+    assert.deepStrictEqual(updated.body.assets,
+      [{ vendor: 'fortinet', product: 'fortiproxy', exposure: 'internal' }]);
+  } finally { await cleanup(); }
+});
+
+test('relevance is null when no profile is active', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const { hitId } = await seedRelevanceFixture(store);
+    const res = await get(createApp(store), `/api/items/${hitId}`);
+    assert.strictEqual(res.body.relevance, null);
   } finally { await cleanup(); }
 });

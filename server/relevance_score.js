@@ -66,11 +66,27 @@ function scoreRelevance(profile, item, now = new Date()) {
   const profDomains = profile.threat_domains || [];
   const cpes = item.cpes || [];
 
-  // A product hit is a much stronger claim than its vendor ("we run FortiOS" vs "we run
-  // something by Fortinet"), so they are tracked separately and weighted differently.
-  const productHits = cpes.filter((c) => profProducts.includes(c.product));
-  const vendorHits = cpes.filter((c) => profVendors.includes(c.vendor) && !productHits.includes(c));
-  const assetMatch = productHits.length > 0 || vendorHits.length > 0;
+  // Two signals of very different strength. A profile_assets row is a specific claim ("we run
+  // FortiOS, and it faces the internet"); a vendors[]/products[] entry is the legacy,
+  // unqualified one. Only the first can be urgent — 'microsoft' matches 7519 item_cpes rows,
+  // so letting it reach act_now is what made the verdict read as noise.
+  const profAssets = profile.assets || [];
+  const assetHits = cpes.filter((c) => profAssets.some((a) => a.vendor === c.vendor && a.product === c.product));
+  const assetHit = assetHits.length > 0;
+
+  const legacyHits = cpes.filter((c) => (profProducts.includes(c.product) || profVendors.includes(c.vendor))
+    && !assetHits.includes(c));
+  const legacyHit = legacyHits.length > 0;
+
+  // An internet-facing instance is the one that matters even when the same product also runs
+  // internally, so the strongest exposure among matched assets decides the rung.
+  const EXPOSURE_RANK = { internet: 2, unknown: 1, internal: 0 };
+  const exposure = assetHit
+    ? assetHits.reduce((worst, c) => {
+      const a = profAssets.find((x) => x.vendor === c.vendor && x.product === c.product);
+      return EXPOSURE_RANK[a.exposure] > EXPOSURE_RANK[worst] ? a.exposure : worst;
+    }, 'internal')
+    : 'unknown';
 
   const domainHits = overlap(item.domains || [], profDomains);
   const domainMatch = domainHits.length > 0;
@@ -87,8 +103,8 @@ function scoreRelevance(profile, item, now = new Date()) {
 
   const sectorMatch = !!(item.industry && profile.sector && item.industry === profile.sector);
 
-  for (const c of productHits) matches.push({ kind: 'product', value: `${c.vendor} ${c.product}` });
-  for (const c of vendorHits) matches.push({ kind: 'vendor', value: c.vendor });
+  for (const c of assetHits) matches.push({ kind: 'product', value: `${c.vendor} ${c.product}` });
+  for (const c of legacyHits) matches.push({ kind: 'vendor', value: c.vendor });
   for (const d of domainHits) matches.push({ kind: 'domain', value: d });
   if (kev) matches.push({ kind: 'kev', value: 'CISA KEV' });
   if (sectorMatch) matches.push({ kind: 'sector', value: item.industry });
@@ -99,18 +115,22 @@ function scoreRelevance(profile, item, now = new Date()) {
   const atFloor = meetsFloor(severity, floor);
 
   let tier;
-  if (assetMatch && (kev || atLeastHigh) && recent) tier = 'act_now';
-  else if (assetMatch) tier = 'watch';
+  // An unanswered exposure still reaches act_now: only a positive "this is internal" demotes.
+  // Withholding urgency on an actively-exploited flaw because a survey question was skipped
+  // would fail in the wrong direction.
+  if (assetHit && exposure !== 'internal' && (kev || atLeastHigh) && recent) tier = 'act_now';
+  else if (assetHit && (kev || atLeastHigh) && recent) tier = 'watch';
+  else if (assetHit) tier = 'watch';
   else if (domainMatch && atFloor && recent) tier = 'watch';
   else if (sectorMatch && recent) tier = 'watch';
-  else if (domainMatch || atFloor) tier = 'low';
+  else if (legacyHit || domainMatch || atFloor) tier = 'low';
   else tier = 'not_yours';
 
   // Tiebreak only, never rendered. Weights are deliberately coarse — this orders a list, it does
   // not quantify risk.
   let score = 0;
-  score += productHits.length ? 5 : 0;
-  score += vendorHits.length ? 3 : 0;
+  score += assetHits.length ? 5 : 0;
+  score += legacyHits.length ? 3 : 0;
   score += kev ? 4 : 0;
   score += domainMatch ? 1 : 0;
   if (cvss != null) score += Math.max(0, Math.min(3, (cvss / 10) * 3));
@@ -118,7 +138,9 @@ function scoreRelevance(profile, item, now = new Date()) {
   if (recent) score += Math.max(0, Math.min(2, 2 * (1 - age / SCORER_RECENT_DAYS)));
 
   // Nothing matched, so there is nothing to explain — an empty list, not a list of non-reasons.
-  return { tier, score, matches: tier === 'not_yours' ? [] : matches };
+  // `exposure` travels with the verdict because consequence.js needs the same value the rung
+  // was decided on, not a second guess at it.
+  return { tier, score, matches: tier === 'not_yours' ? [] : matches, exposure };
 }
 
 module.exports = { scoreRelevance, SCORER_RECENT_DAYS, TIERS };

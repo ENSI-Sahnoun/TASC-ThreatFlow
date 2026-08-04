@@ -99,6 +99,25 @@ async function applySchema(s = store) {
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Precise tech-stack rows. profiles.vendors/products are retained for backward
+    -- compatibility and keep feeding the low tier; only a profile_assets row can earn
+    -- act_now, because a vendor-level claim ("we use Microsoft software") is not evidence of
+    -- exposure to a specific flaw. 'microsoft' matches 7519 item_cpes rows.
+    --
+    -- exposure is the crossing that turns a CVSS vector into a statement about the reader:
+    -- AV:N alone is a property of the flaw, AV:N on an internet-facing asset is personal.
+    -- It defaults to 'unknown', never 'internal' — assuming an unanswered question is safe
+    -- would silently demote an actively-exploited flaw.
+    CREATE TABLE IF NOT EXISTS profile_assets (
+      profile_id INT  NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      vendor     TEXT NOT NULL,
+      product    TEXT NOT NULL,
+      exposure   TEXT NOT NULL DEFAULT 'unknown'
+                 CHECK (exposure IN ('internet','internal','unknown')),
+      UNIQUE(profile_id, vendor, product)
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_assets_product ON profile_assets(vendor, product);
+
     -- Materialized because sorting 24k rows by tier has to happen in SQL — a page cannot be
     -- sorted by a value that has not been computed. Keyed by profile_version so a profile edit
     -- invalidates verdicts; superseded versions are left orphaned rather than deleted, so
@@ -188,6 +207,9 @@ async function applySchema(s = store) {
       epss_score   DOUBLE PRECISION,
       kev_listed   BOOLEAN NOT NULL DEFAULT false,
       kev_added_at TIMESTAMPTZ,
+      -- CISA's remediation deadline. The only externally-set date in the corpus: every other
+      -- urgency signal here is derived, this one is stated by the authority that set it.
+      kev_due_date DATE,
       description  TEXT,
       first_seen   TIMESTAMPTZ,
       last_seen    TIMESTAMPTZ,
@@ -269,6 +291,31 @@ async function applySchema(s = store) {
     -- CREATE TABLE IF NOT EXISTS never alters an existing table, so the column needs this too.
     ALTER TABLE items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_version TEXT;
+    ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS kev_due_date DATE;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS cvss_vector TEXT;
+    -- Deterministic consequence slots, materialized by the same pure pass that writes tier.
+    -- Nullable: rows written before this column existed carry NULL until the next recompute.
+    ALTER TABLE item_relevance ADD COLUMN IF NOT EXISTS consequence JSONB;
+
+    -- One-time migration per profile, expressed idempotently so a re-apply is a no-op. Every
+    -- profile created before profile_assets existed keeps its act_now lane: its products[]
+    -- entries become assets at 'unknown' exposure, which the ladder still allows to reach
+    -- act_now. The vendor is recovered by joining item_cpes; a slug appearing under several
+    -- vendors yields one row per vendor, because the profile never recorded which it meant,
+    -- and a slug matching nothing is skipped.
+    --
+    -- The NOT EXISTS guard is what makes this a migration rather than a policy: without it,
+    -- every boot would reinstate an asset the user had deliberately deleted. The residual
+    -- edge case is a profile whose assets are ALL removed while products[] still lists them —
+    -- that one reseeds on the next boot. Clearing products[] alongside is the fix, and the
+    -- profile editor does exactly that.
+    INSERT INTO profile_assets (profile_id, vendor, product, exposure)
+    SELECT DISTINCT p.id, c.vendor, c.product, 'unknown'
+      FROM profiles p
+      JOIN LATERAL unnest(p.products) AS prod(slug) ON true
+      JOIN item_cpes c ON c.product = prod.slug
+     WHERE NOT EXISTS (SELECT 1 FROM profile_assets pa WHERE pa.profile_id = p.id)
+    ON CONFLICT (profile_id, vendor, product) DO NOTHING;
   `);
 }
 

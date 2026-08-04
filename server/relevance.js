@@ -6,9 +6,10 @@
 // bounded concurrency here — that machinery only exists to survive slow model calls, and this
 // path has none.
 const { scoreRelevance } = require('./relevance_score');
+const { buildConsequence } = require('./consequence');
 const { getProfile } = require('./profiles');
 
-// 6 params per row; Postgres caps a statement at 65535 bind parameters, so 1000 rows (6000
+// 7 params per row; Postgres caps a statement at 65535 bind parameters, so 1000 rows (7000
 // params) stays far inside the limit while cutting round-trips by three orders of magnitude.
 const INSERT_BATCH = 1000;
 
@@ -17,10 +18,13 @@ const INSERT_BATCH = 1000;
 // items.exploitation_status / items.epss_score, which are populated on 166 and 50 rows.
 async function assembleItems(store) {
   const rows = await store.all(`
-    SELECT i.id, i.severity, i.cvss_score, i.cvss_version, i.published_at, i.industry,
+    SELECT i.id, i.severity, i.cvss_score, i.cvss_version, i.cvss_vector, i.published_at, i.industry,
            COALESCE(d.domains, '{}') AS domains,
            COALESCE(c.cpes, '[]'::jsonb) AS cpes,
-           ci.kev_listed, ci.epss_score, ci.severity AS cve_severity, ci.cvss_score AS cve_cvss
+           ci.kev_listed, ci.epss_score, ci.severity AS cve_severity, ci.cvss_score AS cve_cvss,
+           -- As text, never as a Date: pg parses DATE at local midnight, so serializing it
+           -- through toISOString() would render CISA's deadline a day early.
+           to_char(ci.kev_due_date, 'YYYY-MM-DD') AS kev_due_date
       FROM items i
       LEFT JOIN LATERAL (
         SELECT array_agg(domain) AS domains FROM item_domains WHERE item_id = i.id
@@ -45,6 +49,7 @@ async function assembleItems(store) {
     severity: r.severity,
     cvssScore: r.cvss_score,
     cvssVersion: r.cvss_version,
+    cvssVector: r.cvss_vector,
     publishedAt: r.published_at,
     industry: r.industry,
     domains: r.domains || [],
@@ -53,6 +58,7 @@ async function assembleItems(store) {
       ? null
       : {
         kevListed: !!r.kev_listed,
+        kevDueDate: r.kev_due_date,
         epssScore: r.epss_score,
         severity: r.cve_severity,
         cvssScore: r.cve_cvss,
@@ -69,9 +75,29 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
   const values = [];
 
   for (const item of items) {
-    const { tier, score, matches } = scoreRelevance(profile, item, now);
+    const { tier, score, matches, exposure } = scoreRelevance(profile, item, now);
     tiers[tier] += 1;
-    values.push([profile.id, item.id, profile.profile_version, tier, score, JSON.stringify(matches)]);
+
+    // Deterministic, pure and cheap, so it is materialized in the same pass rather than
+    // recomputed on every read. It cannot affect `tier` — that was decided on the line above.
+    // The asset whose exposure the scorer settled on is the one whose vendor/product names the
+    // role, so the sentence describes the thing that actually made this urgent.
+    const asset = (profile.assets || []).find((a) => a.exposure === exposure
+      && (item.cpes || []).some((c) => c.vendor === a.vendor && c.product === a.product));
+    const consequence = buildConsequence({
+      vector: item.cvssVector,
+      exposure,
+      vendor: asset ? asset.vendor : null,
+      product: asset ? asset.product : null,
+      kevListed: !!(item.cve && item.cve.kevListed),
+      kevDueDate: item.cve ? item.cve.kevDueDate : null,
+      epssScore: item.cve ? item.cve.epssScore : null,
+    });
+
+    // exposure rides inside the stored JSON so the read path never has to recover it by
+    // parsing a `from` string, which is human-facing provenance rather than a data channel.
+    values.push([profile.id, item.id, profile.profile_version, tier, score,
+      JSON.stringify(matches), JSON.stringify({ ...consequence, exposure })]);
   }
 
   await store.tx(async (t) => {
@@ -88,10 +114,10 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
       const tuples = chunk.map((v) => {
         const base = params.length;
         params.push(...v);
-        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6}::jsonb)`;
+        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6}::jsonb,$${base + 7}::jsonb)`;
       });
       await t.run(
-        `INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches)
+        `INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches, consequence)
          VALUES ${tuples.join(',')}`, params);
     }
   });

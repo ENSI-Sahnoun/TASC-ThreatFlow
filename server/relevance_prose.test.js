@@ -9,6 +9,9 @@ const PROFILE_INPUT = {
   name: 'Acme', sector: 'finance',
   vendors: ['fortinet'], products: ['fortios'],
   threatDomains: ['ransomware'], severityFloor: 'medium',
+  // Ladder v2: prose is written for act_now and watch only, and only an asset row can reach
+  // them. This fixture represents a profile that actually runs FortiOS.
+  assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'unknown' }],
 };
 
 async function seed(store) {
@@ -193,4 +196,79 @@ test('isUsableSentence rejects a too-short fragment', () => {
   assert.strictEqual(isUsableSentence('Bad.'), false);
   assert.strictEqual(isUsableSentence(''), false);
   assert.strictEqual(isUsableSentence(null), false);
+});
+
+// --- Prose v2: slots, not key/value pairs ---
+
+const { templateSentence } = require('./relevance_prose');
+
+const FULL = {
+  reach: { text: 'anyone on the internet, with no password', from: 'AV:N/PR:N/UI:N + exposure=internet' },
+  impact: { text: 'read, change and shut down', from: 'C:H/I:H/A:H' },
+  role: { text: 'your company email', from: 'asset_roles: microsoft/exchange_server' },
+  urgency: { text: 'already used in real attacks', due: '2026-08-17', from: 'KEV' },
+};
+
+test('templateSentence names the reach, the impact and the role', () => {
+  const s = templateSentence(FULL, []);
+  // Case-insensitive: the reach clause opens the sentence, so it is capitalized.
+  assert.match(s, /anyone on the internet/i);
+  assert.match(s, /read, change and shut down/);
+  assert.match(s, /your company email/);
+});
+
+test('templateSentence starts with a capital and ends with a full stop', () => {
+  const s = templateSentence(FULL, []);
+  assert.match(s, /^[A-Z]/);
+  assert.match(s, /\.$/);
+});
+
+test('templateSentence omits a null slot without leaving a gap', () => {
+  const s = templateSentence({ ...FULL, urgency: null }, []);
+  assert.ok(!/undefined|null/.test(s));
+  assert.ok(!/already used/.test(s));
+});
+
+test('templateSentence still says something with only an impact', () => {
+  const s = templateSentence({ reach: null, impact: FULL.impact, role: FULL.role, urgency: null }, []);
+  assert.match(s, /read, change and shut down/);
+  assert.ok(!/undefined/.test(s));
+});
+
+test('templateSentence names the thing generically when the role is unmapped', () => {
+  const s = templateSentence({ ...FULL, role: null }, []);
+  assert.match(s, /this system/);
+});
+
+// The whole point of v2: a rejected model output must land on something specific, not on
+// "Matches your stack (microsoft windows)".
+test('templateSentence falls back to the match reasons only when every slot is null', () => {
+  const s = templateSentence({ reach: null, impact: null, role: null, urgency: null },
+    [{ kind: 'product', value: 'fortinet fortios' }]);
+  assert.ok(s.length > 0);
+  assert.ok(!/undefined/.test(s));
+});
+
+test('templateSentence tolerates a null consequence entirely', () => {
+  assert.ok(templateSentence(null, [{ kind: 'kev', value: 'CISA KEV' }]).length > 0);
+});
+
+test('buildPrompt states the slot facts and never the raw kind:value pairs', () => {
+  const p = buildPrompt({ sector: 'finance' },
+    { title: 'Exchange flaw', summary: null, consequence: FULL, matches: [] });
+  assert.match(p, /anyone on the internet/);
+  assert.match(p, /read, change and shut down/);
+  assert.ok(!/"kind"/.test(p));
+});
+
+test('buildPrompt keeps the no-breach-claim instruction', () => {
+  const p = buildPrompt({ sector: 'finance' },
+    { title: 't', summary: null, consequence: FULL, matches: [] });
+  assert.match(p, /never state or imply/i);
+});
+
+test('buildPrompt works when the consequence is empty, falling back to matches', () => {
+  const p = buildPrompt({ sector: 'finance' },
+    { title: 't', summary: null, consequence: null, matches: [{ kind: 'kev', value: 'CISA KEV' }] });
+  assert.match(p, /exploited/i);
 });

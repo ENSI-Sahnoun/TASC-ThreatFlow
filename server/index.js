@@ -373,7 +373,8 @@ function createApp(store) {
     const demotionRank = "CASE WHEN iq.verdict IN ('roundup','commentary','promotion') THEN 1 ELSE 0 END";
 
     let relJoin = '';
-    let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches, NULL::text AS rel_sentence';
+    let relSelect = 'NULL::text AS rel_tier, NULL::jsonb AS rel_matches, NULL::text AS rel_sentence, '
+      + 'NULL::jsonb AS rel_consequence';
     let orderBy = `ORDER BY ${demotionRank}, COALESCE(items.published_at, items.fetched_at) DESC`;
     if (profile) {
       const pid = ph(profile.id);
@@ -383,7 +384,7 @@ function createApp(store) {
                  LEFT JOIN item_relevance_prose irp
                    ON irp.item_id = items.id AND irp.profile_id = ${pid} AND irp.profile_version = ${pver}`;
       relSelect = "COALESCE(ir.tier, 'not_yours') AS rel_tier, COALESCE(ir.matches, '[]'::jsonb) AS rel_matches, "
-        + 'irp.sentence AS rel_sentence';
+        + 'irp.sentence AS rel_sentence, ir.consequence AS rel_consequence';
       // Rank, don't hide — opt-in only.
       if (req.query.relevantOnly === '1') where.push("COALESCE(ir.tier, 'not_yours') IN ('act_now','watch')");
       // Personal relevance is the primary axis; quality only breaks ties beneath it. An
@@ -419,13 +420,22 @@ function createApp(store) {
       // `sentence` is the model's wording and is null whenever it has not been written — the
       // frontend falls back to the templated sentence built from `matches`, so an unreachable
       // Ollama degrades the phrasing and nothing else.
+      // `consequence` is null for a row written before the column existed, or for an item the
+      // recompute has not reached yet. The panel renders that as a stated gap, not a blank.
       row.relevance = profile
-        ? { tier: row.rel_tier, matches: row.rel_matches, sentence: row.rel_sentence ?? null }
+        ? {
+          tier: row.rel_tier,
+          matches: row.rel_matches,
+          sentence: row.rel_sentence ?? null,
+          consequence: row.rel_consequence ?? null,
+          exposure: row.rel_consequence?.exposure ?? 'unknown',
+        }
         : null;
       row.quality = row.quality_verdict ? { verdict: row.quality_verdict } : null;
       delete row.rel_tier;
       delete row.rel_matches;
       delete row.rel_sentence;
+      delete row.rel_consequence;
       delete row.quality_verdict;
     }
     // Total lives in a header so the body stays a bare array (stable contract); the
@@ -468,12 +478,18 @@ function createApp(store) {
     let relevance = null;
     if (profile) {
       const rel = await store.get(
-        'SELECT tier, matches FROM item_relevance WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+        'SELECT tier, matches, consequence FROM item_relevance WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
         [id, profile.id, profile.profile_version]);
       const prose = await store.get(
         'SELECT sentence FROM item_relevance_prose WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
         [id, profile.id, profile.profile_version]);
-      relevance = { tier: rel?.tier ?? 'not_yours', matches: rel?.matches ?? [], sentence: prose?.sentence ?? null };
+      relevance = {
+        tier: rel?.tier ?? 'not_yours',
+        matches: rel?.matches ?? [],
+        sentence: prose?.sentence ?? null,
+        consequence: rel?.consequence ?? null,
+        exposure: rel?.consequence?.exposure ?? 'unknown',
+      };
     }
     const quality = await store.get('SELECT verdict FROM item_quality WHERE item_id = $1', [id]);
     // Drill-down (the demo's headline feature) needs the associated entities, not just
