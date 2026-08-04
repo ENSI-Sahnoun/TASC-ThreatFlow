@@ -1,5 +1,6 @@
-import { Component, ChangeDetectionStrategy, OnInit, inject, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, OnInit, inject, signal, effect } from '@angular/core';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { SyncService } from '../../core/sync.service';
 import { KpiStripComponent } from './kpi-strip.component';
 import { LaneExploitedComponent } from './lane-exploited.component';
@@ -157,11 +158,23 @@ import type { DashboardStats } from '../../core/models';
 })
 export class DashboardComponent implements OnInit {
   private api = inject(ApiService);
+  private profileService = inject(ProfileService);
   sync = inject(SyncService);
 
   stats = signal<DashboardStats | null>(null);
   loading = signal(true);
   error = signal(false);
+
+  constructor() {
+    // GET /api/stats/dashboard carries no profile/relevance data today — this wiring is a no-op
+    // now and exists so a future personalized dashboard figure doesn't silently need it added.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      this.load();
+    });
+  }
 
   ngOnInit(): void {
     this.load();

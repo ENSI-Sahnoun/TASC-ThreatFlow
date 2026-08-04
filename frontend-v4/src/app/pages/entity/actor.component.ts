@@ -1,8 +1,9 @@
-import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, effect } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { EntityProfileComponent } from './entity-profile.component';
 import type { EntityProfile } from '../../core/models';
 
@@ -28,6 +29,7 @@ import type { EntityProfile } from '../../core/models';
 export class ActorComponent {
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
+  private profileService = inject(ProfileService);
 
   private name = '';
 
@@ -41,6 +43,16 @@ export class ActorComponent {
       this.name = pm.get('name') ?? '';
       this.profile.set(null);
       this.load();
+    });
+
+    // GET /api/actors/:name carries no profile data. This is also the transitive fix for
+    // entity-profile.component.ts, which shares this page's render body but owns no fetch of
+    // its own.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      if (this.name) this.load();
     });
   }
 

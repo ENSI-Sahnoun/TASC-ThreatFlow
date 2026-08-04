@@ -1,8 +1,9 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
@@ -230,6 +231,7 @@ import type { CveDetail } from '../../core/models';
 export class CveComponent {
   private api = inject(ApiService);
   private route = inject(ActivatedRoute);
+  private profileService = inject(ProfileService);
 
   id = '';
 
@@ -259,6 +261,14 @@ export class CveComponent {
       this.id = id;
       this.detail.set(null);
       this.load();
+    });
+
+    // GET /api/cves/:cveId carries no profile data.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      if (this.id) this.load();
     });
   }
 

@@ -387,6 +387,8 @@ Add a constructor (there isn't one yet — `ngOnInit` is the only lifecycle hook
 
 - [ ] **Step 2: `lane-exploited.component.ts`**
 
+**Correction made during execution:** the draft below called `this.ngOnInit()` by hand from the effect, which invokes a lifecycle hook outside Angular's own lifecycle — a latent footgun (nothing stops a future edit from putting non-idempotent setup in `ngOnInit` that shouldn't rerun). Fixed by extracting `ngOnInit`'s body into a private `load()`, the same pattern every other component in Tasks 2–3 already uses, with `ngOnInit` reduced to `this.load()`. `load()` also gained `this.vendorsLoading.set(true); this.vendorsError.set(false);` at its top — required for correctness now that it can run more than once (the original body only ever ran once, when those signals already held their initial values).
+
 Change the `@angular/core` import (line 1):
 
 ```ts
@@ -399,7 +401,7 @@ Add the import after `ApiService`:
 import { ProfileService } from '../../core/profile.service';
 ```
 
-Add the field next to wherever `private api = inject(ApiService);` (or equivalent) is declared in this class, and add a constructor:
+Add the field and a constructor:
 
 ```ts
   private profileService = inject(ProfileService);
@@ -411,7 +413,32 @@ Add the field next to wherever `private api = inject(ApiService);` (or equivalen
     effect(() => {
       this.profileService.dataVersion();
       if (firstProfileRun) { firstProfileRun = false; return; }
-      this.ngOnInit();
+      this.load();
+    });
+  }
+```
+
+Replace the body of `ngOnInit` with a call to a new private `load()`:
+
+```ts
+  ngOnInit(): void {
+    this.load();
+  }
+
+  private load(): void {
+    this.vendorsLoading.set(true);
+    this.vendorsError.set(false);
+    this.api.facets().subscribe({
+      next: (f) => {
+        this.vendorsTotal.set(f.vendors.length);
+        // Capped so the list stays scannable; the total count still gates the empty-state above.
+        this.vendorNames.set(f.vendors.slice(0, 12));
+        this.vendorsLoading.set(false);
+      },
+      error: () => {
+        this.vendorsError.set(true);
+        this.vendorsLoading.set(false);
+      },
     });
   }
 ```

@@ -1,6 +1,7 @@
-import { Component, ChangeDetectionStrategy, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, OnInit, inject, signal, computed, effect } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { ApiService } from '../../core/api.service';
+import { ProfileService } from '../../core/profile.service';
 import { SourceDotComponent } from '../../ui/source-dot.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { relativeTime, sourceHealth, needsKey, statusLabel } from '../../core/format';
@@ -184,10 +185,21 @@ function uniqueSorted(values: Iterable<string>): string[] {
 })
 export class ArsenalIndexComponent implements OnInit {
   private api = inject(ApiService);
+  private profileService = inject(ProfileService);
 
   private allSources = signal<Source[]>([]);
   loading = signal(true);
   error = signal(false);
+
+  constructor() {
+    // GET /api/sources carries no profile data.
+    let firstProfileRun = true;
+    effect(() => {
+      this.profileService.dataVersion();
+      if (firstProfileRun) { firstProfileRun = false; return; }
+      this.load();
+    });
+  }
 
   category = signal(ALL);
   feedKind = signal(ALL);
