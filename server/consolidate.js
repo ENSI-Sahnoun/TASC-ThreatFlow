@@ -87,82 +87,128 @@ async function rebuildCveIntel(store) {
     byCve.get(r.cve_id).push(r);
   }
 
+  // Pure JS below (no awaits) builds one row's worth of data per CVE into parallel arrays,
+  // then three batched statements replace what used to be 1 + N*2 awaited queries per CVE —
+  // at ~20k distinct CVEs and ~25k evidence rows, that was tens of thousands of sequential
+  // round-trips, which is what made consolidate() take minutes instead of seconds.
+  const cveIntel = { cveId: [], cvss: [], cvssSource: [], severity: [], epss: [], kevListed: [], kevAddedAt: [],
+    kevDueDate: [], kevRequiredAction: [], kevRansomware: [], patchUrl: [], advisoryUrl: [],
+    description: [], firstSeen: [], lastSeen: [], sourceCount: [] };
+  const cveSources = { cveId: [], itemId: [], sourceId: [], cvss: [], severity: [] };
+  // Keyed by item_id so a later CVE group's backfill deterministically wins over an earlier
+  // one for the same item — matching the original loop's sequential-overwrite behavior.
+  const staleSeverityByItem = new Map();
+
+  for (const [cveId, evidence] of byCve) {
+    const scored = evidence
+      .filter((e) => e.cvss_score != null)
+      .sort((a, b) => rankOf(a.source_name) - rankOf(b.source_name));
+    const winner = scored[0] || null;
+    const cvss = winner ? Number(winner.cvss_score) : null;
+
+    // FIRST EPSS is the only source that populates epss_score, so match on the column rather
+    // than on the source name — a renamed source must not silently drop the score.
+    const epss = evidence.find((e) => e.epss_score != null);
+
+    // "Is this exploited" and "when did CISA add it to the KEV catalog" are different
+    // questions. enrich.js sets exploitation_status = 'actively_exploited' on ANY item
+    // whose CVE is in the KEV set at ingest — not only the actual CISA KEV item — so the
+    // date must come only from the real KEV row, never from an incidentally-flagged one.
+    const kevRow = evidence.find((e) => e.source_name === KEV_SOURCE);
+    const exploited = kevRow || evidence.find((e) => e.exploitation_status === 'actively_exploited');
+
+    // The remediation deadline CISA set, read from the KEV record itself. Same rule as
+    // kev_added_at: only the real CISA row can supply it, because an incidentally-flagged
+    // NVD row has no deadline to give. Unparseable or absent means null, never a guess.
+    const kevDueDate = kevDueDateFrom(kevRow);
+    const kevRequiredAction = kevRequiredActionFrom(kevRow);
+    const kevRansomware = kevRansomwareFrom(kevRow);
+
+    // The real NVD row, not `winner` — winner is chosen by CVSS-source rank and may be a
+    // different source entirely when NVD didn't score this CVE.
+    const nvdRow = evidence.find((e) => e.source_name === 'NVD CVE API');
+    const patchUrl = referenceUrlFrom(nvdRow, PATCH_TAG);
+    const advisoryUrl = referenceUrlFrom(nvdRow, ADVISORY_TAG);
+
+    // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
+    // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
+    // and become the canonical description.
+    const description = evidence
+      .filter((e) => typeof e.summary === 'string' && e.summary.length >= BOILERPLATE_MIN)
+      .sort((a, b) =>
+        rankOf(a.source_name) - rankOf(b.source_name)
+        || b.summary.length - a.summary.length)[0]?.summary || null;
+
+    const times = evidence.map((e) => e.published_at).filter(Boolean).map((d) => new Date(d).getTime()).sort((a, b) => a - b);
+    const severity = severityFromScore(cvss)
+      || (evidence.map((e) => canonicalSeverity(e.severity)).find((s) => s !== 'unknown'))
+      || 'unknown';
+
+    // Some sources for this CVE (KEV, EPSS, Exploit-DB, Project Zero...) never carry a native
+    // severity/CVSS of their own — their item rows stay severity IS NULL forever even once
+    // corroborating sources (NVD, OSV, Red Hat) resolve one for the same CVE. Backfill it.
+    if (severity !== 'unknown') {
+      for (const e of evidence) {
+        if (e.severity == null) staleSeverityByItem.set(e.item_id, severity);
+      }
+    }
+
+    cveIntel.cveId.push(cveId);
+    cveIntel.cvss.push(cvss);
+    cveIntel.cvssSource.push(winner ? winner.source_name : null);
+    cveIntel.severity.push(severity);
+    cveIntel.epss.push(epss ? Number(epss.epss_score) : null);
+    cveIntel.kevListed.push(Boolean(exploited));
+    cveIntel.kevAddedAt.push(kevRow ? kevRow.published_at : null);
+    cveIntel.kevDueDate.push(kevDueDate);
+    cveIntel.kevRequiredAction.push(kevRequiredAction);
+    cveIntel.kevRansomware.push(kevRansomware);
+    cveIntel.patchUrl.push(patchUrl);
+    cveIntel.advisoryUrl.push(advisoryUrl);
+    cveIntel.description.push(description);
+    cveIntel.firstSeen.push(times.length ? new Date(times[0]) : null);
+    cveIntel.lastSeen.push(times.length ? new Date(times[times.length - 1]) : null);
+    cveIntel.sourceCount.push(new Set(evidence.map((e) => e.source_id)).size);
+
+    for (const e of evidence) {
+      cveSources.cveId.push(cveId);
+      cveSources.itemId.push(e.item_id);
+      cveSources.sourceId.push(e.source_id);
+      cveSources.cvss.push(e.cvss_score);
+      cveSources.severity.push(canonicalSeverity(e.severity));
+    }
+  }
+
   await store.tx(async (t) => {
     await t.run('DELETE FROM cve_intel');   // cve_sources cascades
-    for (const [cveId, evidence] of byCve) {
-      const scored = evidence
-        .filter((e) => e.cvss_score != null)
-        .sort((a, b) => rankOf(a.source_name) - rankOf(b.source_name));
-      const winner = scored[0] || null;
-      const cvss = winner ? Number(winner.cvss_score) : null;
 
-      // FIRST EPSS is the only source that populates epss_score, so match on the column rather
-      // than on the source name — a renamed source must not silently drop the score.
-      const epss = evidence.find((e) => e.epss_score != null);
+    if (staleSeverityByItem.size) {
+      await t.run(
+        `UPDATE items SET severity = v.severity
+           FROM (SELECT * FROM unnest($1::int[], $2::text[]) AS v(item_id, severity)) v
+          WHERE items.id = v.item_id`,
+        [[...staleSeverityByItem.keys()], [...staleSeverityByItem.values()]]);
+    }
 
-      // "Is this exploited" and "when did CISA add it to the KEV catalog" are different
-      // questions. enrich.js sets exploitation_status = 'actively_exploited' on ANY item
-      // whose CVE is in the KEV set at ingest — not only the actual CISA KEV item — so the
-      // date must come only from the real KEV row, never from an incidentally-flagged one.
-      const kevRow = evidence.find((e) => e.source_name === KEV_SOURCE);
-      const exploited = kevRow || evidence.find((e) => e.exploitation_status === 'actively_exploited');
-
-      // The remediation deadline CISA set, read from the KEV record itself. Same rule as
-      // kev_added_at: only the real CISA row can supply it, because an incidentally-flagged
-      // NVD row has no deadline to give. Unparseable or absent means null, never a guess.
-      const kevDueDate = kevDueDateFrom(kevRow);
-      const kevRequiredAction = kevRequiredActionFrom(kevRow);
-      const kevRansomware = kevRansomwareFrom(kevRow);
-
-      // The real NVD row, not `winner` — winner is chosen by CVSS-source rank and may be a
-      // different source entirely when NVD didn't score this CVE.
-      const nvdRow = evidence.find((e) => e.source_name === 'NVD CVE API');
-      const patchUrl = referenceUrlFrom(nvdRow, PATCH_TAG);
-      const advisoryUrl = referenceUrlFrom(nvdRow, ADVISORY_TAG);
-
-      // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
-      // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
-      // and become the canonical description.
-      const description = evidence
-        .filter((e) => typeof e.summary === 'string' && e.summary.length >= BOILERPLATE_MIN)
-        .sort((a, b) =>
-          rankOf(a.source_name) - rankOf(b.source_name)
-          || b.summary.length - a.summary.length)[0]?.summary || null;
-
-      const times = evidence.map((e) => e.published_at).filter(Boolean).map((d) => new Date(d).getTime()).sort((a, b) => a - b);
-      const severity = severityFromScore(cvss)
-        || (evidence.map((e) => canonicalSeverity(e.severity)).find((s) => s !== 'unknown'))
-        || 'unknown';
-
-      // Some sources for this CVE (KEV, EPSS, Exploit-DB, Project Zero...) never carry a native
-      // severity/CVSS of their own — their item rows stay severity IS NULL forever even once
-      // corroborating sources (NVD, OSV, Red Hat) resolve one for the same CVE. Backfill it.
-      if (severity !== 'unknown') {
-        const staleIds = evidence.filter((e) => e.severity == null).map((e) => e.item_id);
-        if (staleIds.length) {
-          await t.run('UPDATE items SET severity = $1 WHERE id = ANY($2::int[])', [severity, staleIds]);
-        }
-      }
-
+    if (cveIntel.cveId.length) {
       await t.run(
         `INSERT INTO cve_intel (cve_id, cvss_score, cvss_source, severity, epss_score, kev_listed,
                                 kev_added_at, kev_due_date, kev_required_action, kev_ransomware,
                                 patch_url, advisory_url, description, first_seen, last_seen, source_count)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-        [cveId, cvss, winner ? winner.source_name : null, severity,
-         epss ? Number(epss.epss_score) : null, Boolean(exploited), kevRow ? kevRow.published_at : null,
-         kevDueDate, kevRequiredAction, kevRansomware, patchUrl, advisoryUrl,
-         description,
-         times.length ? new Date(times[0]) : null,
-         times.length ? new Date(times[times.length - 1]) : null,
-         new Set(evidence.map((e) => e.source_id)).size]);
+         SELECT * FROM unnest($1::text[], $2::float8[], $3::text[], $4::text[], $5::float8[],
+                              $6::bool[], $7::timestamptz[], $8::date[], $9::text[], $10::bool[],
+                              $11::text[], $12::text[], $13::text[], $14::timestamptz[], $15::timestamptz[], $16::int[])`,
+        [cveIntel.cveId, cveIntel.cvss, cveIntel.cvssSource, cveIntel.severity, cveIntel.epss,
+         cveIntel.kevListed, cveIntel.kevAddedAt, cveIntel.kevDueDate, cveIntel.kevRequiredAction, cveIntel.kevRansomware,
+         cveIntel.patchUrl, cveIntel.advisoryUrl, cveIntel.description, cveIntel.firstSeen, cveIntel.lastSeen, cveIntel.sourceCount]);
+    }
 
-      for (const e of evidence) {
-        await t.run(
-          `INSERT INTO cve_sources (cve_id, item_id, source_id, cvss_score, severity)
-           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (cve_id, item_id) DO NOTHING`,
-          [cveId, e.item_id, e.source_id, e.cvss_score, canonicalSeverity(e.severity)]);
-      }
+    if (cveSources.cveId.length) {
+      await t.run(
+        `INSERT INTO cve_sources (cve_id, item_id, source_id, cvss_score, severity)
+         SELECT * FROM unnest($1::text[], $2::int[], $3::int[], $4::float8[], $5::text[])
+         ON CONFLICT (cve_id, item_id) DO NOTHING`,
+        [cveSources.cveId, cveSources.itemId, cveSources.sourceId, cveSources.cvss, cveSources.severity]);
     }
   });
 
@@ -180,15 +226,37 @@ async function rebuildClusters(store) {
 
   const clusters = clusterItems(items);
 
+  // Batched inserts instead of one INSERT per cluster plus one per member — at ~24k items
+  // (mostly singleton clusters) that was tens of thousands of sequential round-trips, the
+  // dominant remaining cost in rebuildClusters() once clusterItems() itself was indexed.
+  // primary_item_id is a safe correlation key: exactly one cluster owns any given item as
+  // its primary, so it's unique across the batch and lets the generated ids be mapped back
+  // after a single INSERT...RETURNING.
   await store.tx(async (t) => {
     await t.run('DELETE FROM clusters');   // cluster_items cascades
-    for (const c of clusters) {
-      const row = await t.get(
+
+    if (clusters.length) {
+      const inserted = await t.all(
         `INSERT INTO clusters (primary_item_id, title, first_seen, last_seen, source_count)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-        [c.primaryItemId, c.title, c.firstSeen, c.lastSeen, c.sourceIds.length]);
-      for (const itemId of c.itemIds) {
-        await t.run('INSERT INTO cluster_items (cluster_id, item_id) VALUES ($1,$2) ON CONFLICT (item_id) DO NOTHING', [row.id, itemId]);
+         SELECT * FROM unnest($1::int[], $2::text[], $3::timestamptz[], $4::timestamptz[], $5::int[])
+         RETURNING id, primary_item_id`,
+        [clusters.map((c) => c.primaryItemId), clusters.map((c) => c.title),
+         clusters.map((c) => c.firstSeen), clusters.map((c) => c.lastSeen), clusters.map((c) => c.sourceIds.length)]);
+
+      const idByPrimaryItem = new Map(inserted.map((r) => [r.primary_item_id, r.id]));
+      const clusterIds = [];
+      const itemIds = [];
+      for (const c of clusters) {
+        const clusterId = idByPrimaryItem.get(c.primaryItemId);
+        for (const itemId of c.itemIds) { clusterIds.push(clusterId); itemIds.push(itemId); }
+      }
+
+      if (itemIds.length) {
+        await t.run(
+          `INSERT INTO cluster_items (cluster_id, item_id)
+           SELECT * FROM unnest($1::int[], $2::int[])
+           ON CONFLICT (item_id) DO NOTHING`,
+          [clusterIds, itemIds]);
       }
     }
   });
@@ -206,12 +274,17 @@ async function applyConfidence(store) {
        LEFT JOIN cluster_items ci ON ci.item_id = i.id
        LEFT JOIN clusters cl ON cl.id = ci.cluster_id`);
 
-  await store.tx(async (t) => {
-    for (const r of rows) {
-      await t.run('UPDATE items SET confidence = $1 WHERE id = $2',
-        [computeConfidence(r.source_category, r.corroboration), r.id]);
-    }
-  });
+  // One UPDATE...FROM unnest() instead of one UPDATE per row — at 24k+ items, the per-row
+  // version was 24k+ sequential awaited round-trips, the dominant cost in consolidate().
+  if (rows.length) {
+    const ids = rows.map((r) => r.id);
+    const confidences = rows.map((r) => computeConfidence(r.source_category, r.corroboration));
+    await store.run(
+      `UPDATE items SET confidence = v.confidence
+         FROM (SELECT * FROM unnest($1::int[], $2::float8[]) AS v(id, confidence)) v
+        WHERE items.id = v.id`,
+      [ids, confidences]);
+  }
 
   return rows.length;
 }
