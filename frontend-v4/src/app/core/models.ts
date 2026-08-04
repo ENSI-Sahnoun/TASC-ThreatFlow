@@ -86,6 +86,7 @@ export interface Item {
   // reading as not_yours rather than null.
   relevance?: Relevance | null;
   quality?: Quality | null;
+  playbook?: Playbook | null;
 }
 
 export interface ClusterMember {
@@ -261,6 +262,25 @@ export interface Consequence {
   role: ConsequenceSlot | null;
   urgency: ConsequenceSlot | null;
   exposure?: Exposure;
+}
+
+// One remediation step. `link` is a URL read directly from an NVD reference — never composed
+// or guessed client-side. `source` is always present: a step with no source is a step the
+// server's pure builder would not have emitted.
+export interface PlaybookStep {
+  key: string;
+  title: string;
+  detail: string;
+  source: string;
+  link: string | null;
+}
+
+// null only when the item carries no CVE signal, or is not at a tier playbooks attach to
+// (act_now/watch). `done` is the list of ticked step keys for the active profile — not
+// versioned, so it survives a profile edit that regenerates `steps`.
+export interface Playbook {
+  steps: PlaybookStep[];
+  done: string[];
 }
 
 // The tech-stack rows that actually earn urgency. The legacy vendors/products arrays are kept
