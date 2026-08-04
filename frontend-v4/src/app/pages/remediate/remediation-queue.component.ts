@@ -86,6 +86,7 @@ import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/mod
       background: var(--surface-3); overflow: hidden;
     }
     .fill { display: block; height: 100%; background: var(--accent); transition: width var(--dur-slow) var(--ease-out); }
+    @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
     .count { font-size: var(--fs-xs); color: var(--ink-2); }
     .tell-us { font-size: var(--fs-xs); color: var(--accent); text-decoration: none; }
     .tell-us:hover { text-decoration: underline; }
