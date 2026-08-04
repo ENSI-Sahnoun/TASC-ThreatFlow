@@ -356,7 +356,8 @@ In `server/db.js`, immediately after the existing line `ALTER TABLE cve_intel AD
 ```js
     -- Per-product version ranges lifted from the real NVD row's CPE match data (parseCpe/
     -- affectedVersionsFrom in consolidate.js). [{vendor, product, text, startIncluding,
-    -- startExcluding, endIncluding, endExcluding, pinned}] — `text` is the rendered sentence,
+    -- startExcluding, endIncluding, endExcluding, pinned}] — 'text' is the rendered sentence,
+    -- (single quotes, not backticks: this comment sits inside a JS template literal)
     -- the rest are NVD's own bound fields kept comparable for code. Empty array, not null, when
     -- the CVE has no parseable version data — see affectedVersionsFrom's own doc comment.
     ALTER TABLE cve_intel ADD COLUMN IF NOT EXISTS affected_versions JSONB;

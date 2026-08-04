@@ -456,3 +456,40 @@ test('affectedVersionsFrom: no configurations, malformed raw_json, or no row all
   assert.deepStrictEqual(affectedVersionsFrom(null), []);
   assert.deepStrictEqual(affectedVersionsFrom({}), []);
 });
+
+test('rebuildCveIntel writes affected_versions from the real NVD row\'s CPE matches', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, cvss_score, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7020',9.8,'2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [nvd.id, JSON.stringify({
+        configurations: [{ nodes: [{ cpeMatch: [
+          { vulnerable: true, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:*:*:*:*:*:*:x64:*', versionEndExcluding: '10.0.26100.8875' },
+        ] }] }],
+      })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7020']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT affected_versions FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7020']);
+    assert.deepStrictEqual(row.affected_versions, [
+      {
+        vendor: 'microsoft', product: 'windows_11_24h2', text: 'before 10.0.26100.8875',
+        startIncluding: null, startExcluding: null, endIncluding: null,
+        endExcluding: '10.0.26100.8875', pinned: null,
+      },
+    ]);
+  });
+});
+
+test('affected_versions is an empty array when the CVE\'s NVD row has no parseable CPE version data', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await mkItem(store, nvd.id, { cvss: 5.0 });
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7021']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT affected_versions FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7021']);
+    assert.deepStrictEqual(row.affected_versions, []);
+  });
+});
