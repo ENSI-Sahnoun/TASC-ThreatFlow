@@ -23,7 +23,7 @@ async function assembleItems(store) {
            COALESCE(d.domains, '{}') AS domains,
            COALESCE(c.cpes, '[]'::jsonb) AS cpes,
            ci.kev_listed, ci.epss_score, ci.severity AS cve_severity, ci.cvss_score AS cve_cvss,
-           ci.kev_ransomware, ci.patch_url, ci.advisory_url,
+           ci.kev_ransomware, ci.patch_url, ci.advisory_url, ci.affected_versions,
            -- As text, never as a Date: pg parses DATE at local midnight, so serializing it
            -- through toISOString() would render CISA's deadline a day early.
            to_char(ci.kev_due_date, 'YYYY-MM-DD') AS kev_due_date
@@ -67,6 +67,7 @@ async function assembleItems(store) {
         knownRansomware: !!r.kev_ransomware,
         patchUrl: r.patch_url,
         advisoryUrl: r.advisory_url,
+        affectedVersions: r.affected_versions || [],
       },
   }));
 }
@@ -119,6 +120,7 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
         kevRansomware: !!(item.cve && item.cve.knownRansomware),
         patchUrl: item.cve ? item.cve.patchUrl : null,
         advisoryUrl: item.cve ? item.cve.advisoryUrl : null,
+        affectedVersions: item.cve ? item.cve.affectedVersions : [],
       });
       playbookValues.push([profile.id, item.id, profile.profile_version, JSON.stringify(playbookSteps)]);
     }

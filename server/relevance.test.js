@@ -345,3 +345,33 @@ test('a profile edit regenerates the playbook at the new version and leaves the 
     assert.ok(!v2.steps.some((st) => st.key === 'restrict'));
   } finally { await cleanup(); }
 });
+
+test('the confirm step states the affected version range when cve_intel carries one for the matched product', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const s = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+    const i = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, cvss_vector, published_at)
+       VALUES ($1,'cve','FortiOS RCE','CVE-2026-30',$2, now() - interval '2 days') RETURNING id`,
+      [s.id, WORST]);
+    await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [i.id]);
+    await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-30')", [i.id]);
+    await store.run(
+      `INSERT INTO cve_intel (cve_id, severity, kev_listed, affected_versions)
+       VALUES ('CVE-2026-30','critical',true,$1)`,
+      [JSON.stringify([{ vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5' }])]);
+    const p = await createProfile(store, {
+      ...PROFILE_INPUT,
+      assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }],
+    });
+
+    await recomputeProfile(store, p.id);
+
+    const row = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=$3',
+      [i.id, p.id, p.profile_version]);
+    const confirm = row.steps.find((st) => st.key === 'confirm');
+    assert.match(confirm.detail, /before 7\.4\.5/);
+  } finally { await cleanup(); }
+});
