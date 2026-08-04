@@ -148,6 +148,19 @@ export class ApiService {
     return this.http.post(`/api/profiles/${id}/relevance/prose`, {});
   }
 
+  tickPlaybookStep(itemId: number, key: string): Observable<unknown> {
+    return this.http.post(`/api/items/${itemId}/playbook/steps/${encodeURIComponent(key)}`, {});
+  }
+
+  untickPlaybookStep(itemId: number, key: string): Observable<unknown> {
+    return this.http.delete(`/api/items/${itemId}/playbook/steps/${encodeURIComponent(key)}`);
+  }
+
+  // Same posture as generateProfileProse: needs Ollama, runs in the background, fire and move on.
+  wordProfilePlaybooks(id: number): Observable<unknown> {
+    return this.http.post(`/api/profiles/${id}/playbooks/word`, {});
+  }
+
   sectors(): Observable<Sector[]> {
     return this.http.get<Sector[]>('/api/sectors');
   }
