@@ -1019,3 +1019,70 @@ test('GET /api/profiles/:id/remediation returns 404 for an unknown profile id', 
     assert.strictEqual(res.status, 404);
   } finally { await cleanup(); }
 });
+
+// --- Remediation foundation (Spec A): per-item detail route ---
+
+test('GET /api/items/:id/remediation returns remediationFor output plus relevance and playbook', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      `UPDATE cve_intel SET affected_versions = $1 WHERE cve_id = 'CVE-2026-1'`,
+      [JSON.stringify([{
+        vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '7.4.5', pinned: null,
+      }])]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/items/${hitId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.item.id, hitId);
+    assert.ok(res.body.relevance);
+    assert.ok(Array.isArray(res.body.playbook));
+    assert.strictEqual(res.body.remediation.fix.kind, 'version');
+    assert.strictEqual(res.body.remediation.fix.value, '7.4.5');
+    assert.strictEqual(res.body.remediation.status, 'unknown');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation requires X-Profile-Id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const res = await get(app, `/api/items/${hitId}/remediation`);
+    assert.strictEqual(res.status, 400);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation returns 404 for a non-integer id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await get(createApp(store), '/api/items/abc/remediation');
+    assert.strictEqual(res.status, 404);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation returns 400 for an unknown X-Profile-Id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    const res = await send(app, 'GET', `/api/items/${hitId}/remediation`, null, { 'X-Profile-Id': '999' });
+    assert.strictEqual(res.status, 400);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id/remediation returns remediation: null when no asset matches the item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    const res = await get(app, `/api/items/${missId}/remediation?profileId=${created.body.id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.remediation, null);
+  } finally { await cleanup(); }
+});

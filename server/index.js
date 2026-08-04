@@ -237,6 +237,52 @@ function createApp(store) {
     res.json([...groups.values()]);
   }));
 
+  // Per-item remediation detail. remediation is null when no profile_assets row matches the
+  // item's CPEs — the same "no data, not a guess" posture as relevance/playbook already use for
+  // an item with no CVE.
+  app.get('/api/items/:id/remediation', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(404).json({ error: 'not found' });
+    const profile = await resolveProfile(req);
+    if (!profile) return res.status(400).json({ error: 'X-Profile-Id required' });
+
+    const item = await store.get('SELECT * FROM items WHERE id = $1', [id]);
+    if (!item) return res.status(404).json({ error: 'not found' });
+
+    const rel = await store.get(
+      'SELECT tier, matches, consequence FROM item_relevance WHERE item_id=$1 AND profile_id=$2 AND profile_version=$3',
+      [id, profile.id, profile.profile_version]);
+    const pb = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id=$1 AND profile_id=$2 AND profile_version=$3',
+      [id, profile.id, profile.profile_version]);
+    const ci = await store.get(
+      `SELECT ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl"
+         FROM item_cves ic JOIN cve_intel ci ON ci.cve_id = ic.cve_id WHERE ic.item_id = $1
+        ORDER BY ci.kev_listed DESC, ci.cvss_score DESC NULLS LAST LIMIT 1`, [id]);
+
+    // The asset whose exposure ranks highest among those matching this item's CPEs — same
+    // priority order relevance_score.js's EXPOSURE_RANK already uses (internet > unknown >
+    // internal) to pick which exposure decides the tier, reused here so this read-time pick
+    // agrees with what actually drove the item's own scoring.
+    const asset = await store.get(
+      `SELECT pa.vendor, pa.product, pa.exposure, pa.version, pa.version_state AS "versionState"
+         FROM profile_assets pa JOIN item_cpes c ON c.vendor = pa.vendor AND c.product = pa.product
+        WHERE pa.profile_id = $1 AND c.item_id = $2
+        ORDER BY CASE pa.exposure WHEN 'internet' THEN 2 WHEN 'unknown' THEN 1 ELSE 0 END DESC
+        LIMIT 1`, [profile.id, id]);
+
+    const remediation = asset
+      ? remediationFor(asset, (ci && ci.affectedVersions) || [], ci || {}, (pb && pb.steps) || [])
+      : null;
+
+    res.json({
+      item,
+      relevance: rel ? { tier: rel.tier, matches: rel.matches, consequence: rel.consequence } : null,
+      playbook: pb ? pb.steps : null,
+      remediation,
+    });
+  }));
+
   app.get('/api/sources', h(async (req, res) => {
     // item_count backs the Arsenal index card grid — one aggregate query for all 43 sources
     // rather than a per-source stats call each.
