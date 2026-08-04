@@ -8,6 +8,7 @@ export const routes: Routes = [
   { path: 'intel', loadComponent: () => import('./pages/intel/explorer.component').then((m) => m.ExplorerComponent) },
   { path: 'intel/:id', loadComponent: () => import('./pages/intel/item-detail.component').then((m) => m.ItemDetailComponent) },
   { path: 'remediate', loadComponent: () => import('./pages/remediate/remediation-queue.component').then((m) => m.RemediationQueueComponent) },
+  { path: 'remediate/:itemId', loadComponent: () => import('./pages/remediate/remediation-guided.component').then((m) => m.RemediationGuidedComponent) },
   { path: 'check', loadComponent: () => import('./pages/check/url-check-page.component').then((m) => m.UrlCheckPageComponent) },
   { path: 'cve/:id', loadComponent: () => import('./pages/entity/cve.component').then((m) => m.CveComponent) },
   { path: 'actor/:name', loadComponent: () => import('./pages/entity/actor.component').then((m) => m.ActorComponent) },
