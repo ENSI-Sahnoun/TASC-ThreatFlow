@@ -956,3 +956,66 @@ test('a ticked step survives a PUT /api/profiles/:id that bumps profile_version'
     assert.deepStrictEqual(res.body.playbook.done, ['confirm']);
   } finally { await cleanup(); }
 });
+
+// --- Remediation foundation (Spec A): queue route ---
+
+test('GET /api/profiles/:id/remediation groups open threats by asset', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { hitId } = await seedRelevanceFixture(store);
+    await store.run(
+      `UPDATE cve_intel SET affected_versions = $1 WHERE cve_id = 'CVE-2026-1'`,
+      [JSON.stringify([{
+        vendor: 'fortinet', product: 'fortios', text: 'before 7.4.5',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '7.4.5', pinned: null,
+      }])]);
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.length, 1);
+    assert.strictEqual(res.body[0].vendor, 'fortinet');
+    assert.strictEqual(res.body[0].product, 'fortios');
+    assert.strictEqual(res.body[0].versionState, 'unset');
+    assert.strictEqual(res.body[0].items.length, 1);
+    assert.strictEqual(res.body[0].items[0].itemId, hitId);
+    assert.strictEqual(res.body[0].items[0].fix.kind, 'version');
+    assert.strictEqual(res.body[0].items[0].fix.value, '7.4.5');
+    // No version recorded yet — unset must never read as affected or not_covered.
+    assert.strictEqual(res.body[0].items[0].status, 'unknown');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation excludes low/not_yours items', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store); // seeds one act_now item and one unrelated news item
+    const created = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`, null);
+
+    const res = await get(app, `/api/profiles/${created.body.id}/remediation`);
+    const itemIds = res.body.flatMap((g) => g.items.map((i) => i.itemId));
+    // Only the fortios/act_now item can appear; the unrelated news item has no matching asset
+    // and is not_yours, so it must not show up in any group.
+    assert.strictEqual(itemIds.length, res.body.reduce((n, g) => n + g.items.length, 0));
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation returns 404 for a non-integer id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await get(createApp(store), '/api/profiles/abc/remediation');
+    assert.strictEqual(res.status, 404);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation returns 404 for an unknown profile id', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const res = await get(createApp(store), '/api/profiles/999/remediation');
+    assert.strictEqual(res.status, 404);
+  } finally { await cleanup(); }
+});

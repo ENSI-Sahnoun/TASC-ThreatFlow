@@ -14,6 +14,7 @@ const { sourceStats, listCves, cveDetail, entityProfile, feed, search, iocRows, 
 const { SECTORS, recommendationFor } = require('./sector_profiles');
 const profiles = require('./profiles');
 const { recomputeProfile } = require('./relevance');
+const { remediationFor } = require('./remediation');
 const { generateProse } = require('./relevance_prose');
 const { generatePlaybookProse } = require('./playbook_prose');
 const { linkStories } = require('./story_links_batch');
@@ -187,6 +188,53 @@ function createApp(store) {
     if (!profile) return res.status(404).json({ error: 'not found' });
     generatePlaybookProse(store, id).catch(() => {});
     res.status(202).json({ started: true, profileVersion: profile.profile_version });
+  }));
+
+  // The remediation queue: one entry per asset the profile has told us about, each carrying its
+  // open (act_now/watch) threats and what remediationFor says about each. Grouping happens here
+  // rather than in relevance.js because an item can match more than one asset (e.g. two Windows
+  // builds vulnerable to the same CVE) and the queue's whole point is "group by the thing you'd
+  // actually go fix" — recomputeProfile's own per-item asset pick (for consequence/playbook
+  // wording) only ever keeps one, which is the wrong shape for this page.
+  app.get('/api/profiles/:id/remediation', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+
+    const rows = await store.all(`
+      SELECT pa.vendor, pa.product, pa.exposure, pa.version, pa.version_state AS "versionState",
+             i.id AS "itemId", i.title, ir.tier, ir.score,
+             ci.affected_versions AS "affectedVersions", ci.patch_url AS "patchUrl", ci.advisory_url AS "advisoryUrl",
+             ip.steps
+        FROM profile_assets pa
+        JOIN item_cpes c ON c.vendor = pa.vendor AND c.product = pa.product
+        JOIN item_relevance ir ON ir.item_id = c.item_id AND ir.profile_id = pa.profile_id
+                               AND ir.profile_version = $2 AND ir.tier IN ('act_now','watch')
+        JOIN items i ON i.id = ir.item_id
+        LEFT JOIN LATERAL (
+          SELECT ci2.* FROM item_cves icv JOIN cve_intel ci2 ON ci2.cve_id = icv.cve_id
+           WHERE icv.item_id = i.id
+           ORDER BY ci2.kev_listed DESC, ci2.cvss_score DESC NULLS LAST LIMIT 1
+        ) ci ON true
+        LEFT JOIN item_playbooks ip ON ip.item_id = i.id AND ip.profile_id = pa.profile_id AND ip.profile_version = $2
+       WHERE pa.profile_id = $1
+       ORDER BY pa.vendor, pa.product, ir.score DESC
+    `, [profile.id, profile.profile_version]);
+
+    const groups = new Map();
+    for (const r of rows) {
+      const key = `${r.vendor}/${r.product}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          vendor: r.vendor, product: r.product, exposure: r.exposure,
+          version: r.version, versionState: r.versionState, items: [],
+        });
+      }
+      const asset = { vendor: r.vendor, product: r.product, exposure: r.exposure, version: r.version, versionState: r.versionState };
+      const rem = remediationFor(asset, r.affectedVersions || [], { patchUrl: r.patchUrl, advisoryUrl: r.advisoryUrl }, r.steps || []);
+      groups.get(key).items.push({ itemId: r.itemId, title: r.title, tier: r.tier, score: r.score, ...rem });
+    }
+    res.json([...groups.values()]);
   }));
 
   app.get('/api/sources', h(async (req, res) => {
