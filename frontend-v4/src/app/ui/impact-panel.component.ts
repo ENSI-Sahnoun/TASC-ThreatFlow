@@ -29,8 +29,12 @@ import type { Relevance } from '../core/models';
               <dd>
                 {{ b.text }}
                 <!-- Provenance, so a claim about the reader's own estate can be checked rather
-                     than taken on trust. -->
-                @if (b.from) { <span class="from" [title]="b.from">why</span> }
+                     than taken on trust. A button, not a title tooltip — hover-only provenance
+                     was unreachable by keyboard or touch. -->
+                @if (b.from) {
+                  <button type="button" class="from" [attr.aria-expanded]="isOpen(b.label)" (click)="toggle(b.label)">why</button>
+                }
+                @if (b.from && isOpen(b.label)) { <p class="prov">{{ b.from }}</p> }
               </dd>
             </div>
           }
@@ -61,9 +65,13 @@ import type { Relevance } from '../core/models';
     /* A stated gap is quieter than a fact, but still present and still readable. */
     .gap dd { color: var(--ink-2); font-style: italic; }
     .from {
-      font-size: var(--fs-xs); color: var(--ink-2); cursor: help;
-      border-bottom: 1px dotted currentColor; margin-left: 6px;
+      font: inherit; font-size: var(--fs-xs); color: var(--ink-2); cursor: pointer;
+      background: none; border: none; padding: 0; margin-left: 6px;
+      border-bottom: 1px dotted currentColor;
     }
+    .from:hover, .from:focus-visible { color: var(--ink); }
+    .from:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .prov { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--ink-2); }
     .ai-tag { font-size: var(--fs-xs); color: var(--ink-2); margin-left: 6px; }
     .unknown { color: var(--ink-2); font-size: var(--fs-xs); margin: 12px 0 0; }
     @media (max-width: 560px) {
@@ -73,6 +81,20 @@ import type { Relevance } from '../core/models';
 })
 export class ImpactPanelComponent {
   @Input() relevance: Relevance | null = null;
+
+  // No signal: this is a synchronous click handler inside an OnPush component, and Angular runs
+  // change detection on the component whenever a DOM event originates from its own template —
+  // the same reasoning that already lets RelevanceChipComponent's plain getters work.
+  private openBlocks = new Set<string>();
+
+  isOpen(label: string): boolean {
+    return this.openBlocks.has(label);
+  }
+
+  toggle(label: string): void {
+    if (this.openBlocks.has(label)) this.openBlocks.delete(label);
+    else this.openBlocks.add(label);
+  }
 
   explanation = explanation;
   isModelWritten = isModelWritten;
