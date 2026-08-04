@@ -37,6 +37,42 @@ function kevDueDateFrom(kevRow) {
   return typeof due === 'string' && DUE_DATE_RE.test(due) ? due : null;
 }
 
+// CISA's own remediation sentence. Almost always boilerplate ("Apply mitigations per vendor
+// instructions or discontinue use of the product...") — kept as a citation a playbook step can
+// quote, never as the step's only content.
+function kevRequiredActionFrom(kevRow) {
+  if (!kevRow || !kevRow.raw_json) return null;
+  let raw;
+  try { raw = JSON.parse(kevRow.raw_json); } catch { return null; }
+  const action = raw && raw.requiredAction;
+  return typeof action === 'string' && action.trim() ? action.trim() : null;
+}
+
+// CISA's own field is the literal string "Known" or "Unknown", not a boolean.
+function kevRansomwareFrom(kevRow) {
+  if (!kevRow || !kevRow.raw_json) return false;
+  let raw;
+  try { raw = JSON.parse(kevRow.raw_json); } catch { return false; }
+  const flag = raw && raw.knownRansomwareCampaignUse;
+  return typeof flag === 'string' && flag.trim().toLowerCase() === 'known';
+}
+
+const PATCH_TAG = 'Patch';
+const ADVISORY_TAG = 'Vendor Advisory';
+
+// NVD tags each of its own references[] entries ('Patch', 'Vendor Advisory', 'Press/Media
+// Coverage', ...) — reading its tag is how a playbook step cites a real fix location instead
+// of guessing one. Only the real NVD row can supply this, same rule kevDueDateFrom follows for
+// the real CISA row: an incidentally-shared CVE from another source has no references to give.
+function referenceUrlFrom(nvdRow, tag) {
+  if (!nvdRow || !nvdRow.raw_json) return null;
+  let raw;
+  try { raw = JSON.parse(nvdRow.raw_json); } catch { return null; }
+  const refs = Array.isArray(raw && raw.references) ? raw.references : [];
+  const match = refs.find((r) => r && Array.isArray(r.tags) && r.tags.includes(tag) && typeof r.url === 'string');
+  return match ? match.url : null;
+}
+
 async function rebuildCveIntel(store) {
   const rows = await store.all(
     `SELECT ic.cve_id, i.id AS item_id, i.source_id, i.cvss_score, i.epss_score, i.severity, i.summary,
@@ -75,6 +111,14 @@ async function rebuildCveIntel(store) {
       // kev_added_at: only the real CISA row can supply it, because an incidentally-flagged
       // NVD row has no deadline to give. Unparseable or absent means null, never a guess.
       const kevDueDate = kevDueDateFrom(kevRow);
+      const kevRequiredAction = kevRequiredActionFrom(kevRow);
+      const kevRansomware = kevRansomwareFrom(kevRow);
+
+      // The real NVD row, not `winner` — winner is chosen by CVSS-source rank and may be a
+      // different source entirely when NVD didn't score this CVE.
+      const nvdRow = evidence.find((e) => e.source_name === 'NVD CVE API');
+      const patchUrl = referenceUrlFrom(nvdRow, PATCH_TAG);
+      const advisoryUrl = referenceUrlFrom(nvdRow, ADVISORY_TAG);
 
       // Authority first (same SOURCE_RANK used for the CVSS winner above), length only as a
       // tiebreak — otherwise a verbose but unranked news write-up can out-length NVD's summary
@@ -102,11 +146,12 @@ async function rebuildCveIntel(store) {
 
       await t.run(
         `INSERT INTO cve_intel (cve_id, cvss_score, cvss_source, severity, epss_score, kev_listed,
-                                kev_added_at, kev_due_date, description, first_seen, last_seen, source_count)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+                                kev_added_at, kev_due_date, kev_required_action, kev_ransomware,
+                                patch_url, advisory_url, description, first_seen, last_seen, source_count)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [cveId, cvss, winner ? winner.source_name : null, severity,
          epss ? Number(epss.epss_score) : null, Boolean(exploited), kevRow ? kevRow.published_at : null,
-         kevDueDate,
+         kevDueDate, kevRequiredAction, kevRansomware, patchUrl, advisoryUrl,
          description,
          times.length ? new Date(times[0]) : null,
          times.length ? new Date(times[times.length - 1]) : null,

@@ -236,3 +236,93 @@ test('pruneSyncHistory removes rows older than the retention window', async () =
     assert.strictEqual(left.length, 1);
   });
 });
+
+test('rebuildCveIntel lifts requiredAction and knownRansomwareCampaignUse out of the KEV raw record', async () => {
+  await withTestStore(async (store) => {
+    const kev = await mkSource(store, 'CISA Known Exploited Vulnerabilities', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7010','2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [kev.id, JSON.stringify({
+        cveID: 'CVE-2026-7010',
+        requiredAction: 'Apply mitigations per vendor instructions.',
+        knownRansomwareCampaignUse: 'Known',
+      })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7010']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT kev_required_action, kev_ransomware FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7010']);
+    assert.strictEqual(row.kev_required_action, 'Apply mitigations per vendor instructions.');
+    assert.strictEqual(row.kev_ransomware, true);
+  });
+});
+
+test('kev_ransomware is false when CISA has not marked ransomware use', async () => {
+  await withTestStore(async (store) => {
+    const kev = await mkSource(store, 'CISA Known Exploited Vulnerabilities', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7011','2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [kev.id, JSON.stringify({ cveID: 'CVE-2026-7011', knownRansomwareCampaignUse: 'Unknown' })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7011']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT kev_ransomware FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7011']);
+    assert.strictEqual(row.kev_ransomware, false);
+  });
+});
+
+test('rebuildCveIntel lifts Patch and Vendor Advisory reference URLs out of the NVD raw record', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, cvss_score, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7012',9.8,'2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [nvd.id, JSON.stringify({
+        references: [
+          { url: 'https://example.com/advisory', source: 'vendor', tags: ['Vendor Advisory'] },
+          { url: 'https://example.com/patch', source: 'vendor', tags: ['Patch', 'Third Party Advisory'] },
+          { url: 'https://example.com/unrelated', source: 'other', tags: ['Press/Media Coverage'] },
+        ],
+      })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7012']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT patch_url, advisory_url FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7012']);
+    assert.strictEqual(row.patch_url, 'https://example.com/patch');
+    assert.strictEqual(row.advisory_url, 'https://example.com/advisory');
+  });
+});
+
+test('patch_url and advisory_url are null when NVD carries no such reference', async () => {
+  await withTestStore(async (store) => {
+    const nvd = await mkSource(store, 'NVD CVE API', 'Vulnerability Intelligence');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, cvss_score, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7013',9.8,'2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [nvd.id, JSON.stringify({ references: [{ url: 'https://example.com/x', source: 'other', tags: ['Press/Media Coverage'] }] })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7013']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT patch_url, advisory_url FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7013']);
+    assert.strictEqual(row.patch_url, null);
+    assert.strictEqual(row.advisory_url, null);
+  });
+});
+
+// References must come from the real NVD row, not from a differently-sourced item that
+// happens to share the CVE — same rule kev_due_date already follows for the KEV row.
+test('reference URLs come only from the real NVD row', async () => {
+  await withTestStore(async (store) => {
+    const rh = await mkSource(store, 'Red Hat Security Data', 'Vendor Advisory');
+    const a = await store.get(
+      `INSERT INTO items (source_id, category, title, cvss_score, published_at, raw_json)
+       VALUES ($1,'cve','CVE-2026-7014',7.5,'2026-07-01T00:00:00Z',$2) RETURNING id`,
+      [rh.id, JSON.stringify({ references: [{ url: 'https://example.com/patch', source: 'x', tags: ['Patch'] }] })]);
+    await store.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1,$2)', [a.id, 'CVE-2026-7014']);
+
+    await rebuildCveIntel(store);
+    const row = await store.get('SELECT patch_url FROM cve_intel WHERE cve_id=$1', ['CVE-2026-7014']);
+    assert.strictEqual(row.patch_url, null);
+  });
+});
