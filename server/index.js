@@ -15,6 +15,7 @@ const { SECTORS, recommendationFor } = require('./sector_profiles');
 const profiles = require('./profiles');
 const { recomputeProfile } = require('./relevance');
 const { generateProse } = require('./relevance_prose');
+const { generatePlaybookProse } = require('./playbook_prose');
 const { linkStories } = require('./story_links_batch');
 const { similarityLabel } = require('./story_links');
 
@@ -176,6 +177,16 @@ function createApp(store) {
     const result = id && await recomputeProfile(store, id);
     if (!result) return res.status(404).json({ error: 'not found' });
     res.status(202).json(result);
+  }));
+
+  // Mirrors /relevance/prose: needs Ollama, runs in the background, its failure never looks
+  // like a scoring failure. Rewords item_playbooks.steps[].detail only.
+  app.post('/api/profiles/:id/playbooks/word', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+    generatePlaybookProse(store, id).catch(() => {});
+    res.status(202).json({ started: true, profileVersion: profile.profile_version });
   }));
 
   app.get('/api/sources', h(async (req, res) => {
@@ -491,6 +502,19 @@ function createApp(store) {
         exposure: rel?.consequence?.exposure ?? 'unknown',
       };
     }
+    let playbook = null;
+    if (profile) {
+      const pb = await store.get(
+        'SELECT steps FROM item_playbooks WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+        [id, profile.id, profile.profile_version]);
+      if (pb) {
+        const done = (await store.all(
+          'SELECT step_key FROM playbook_step_state WHERE item_id = $1 AND profile_id = $2',
+          [id, profile.id]
+        )).map((r) => r.step_key);
+        playbook = { steps: pb.steps, done };
+      }
+    }
     const quality = await store.get('SELECT verdict FROM item_quality WHERE item_id = $1', [id]);
     // Drill-down (the demo's headline feature) needs the associated entities, not just
     // the flat row. Embed each child collection so a detail view has one source of truth.
@@ -525,8 +549,45 @@ function createApp(store) {
       clusterId: cluster ? cluster.id : null,
       relatedStoryCount: cluster ? cluster.related_count : 0,
       relevance,
+      playbook,
       quality: quality ? { verdict: quality.verdict } : null,
     });
+  }));
+
+  // Step routes take the profile from X-Profile-Id, like every other profile-scoped route.
+  // An unknown step_key is a caller error (a stale key from a superseded skeleton, or a typo),
+  // not a database write — storing a tick against a step that does not exist would be
+  // unreachable dead data.
+  app.post('/api/items/:id/playbook/steps/:key', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(404).json({ error: 'not found' });
+    const profile = await resolveProfile(req);
+    if (!profile) return res.status(400).json({ error: 'X-Profile-Id required' });
+
+    const pb = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+      [id, profile.id, profile.profile_version]);
+    if (!pb || !pb.steps.some((s) => s.key === req.params.key)) {
+      return res.status(404).json({ error: 'not found' });
+    }
+
+    await store.run(
+      `INSERT INTO playbook_step_state (profile_id, item_id, step_key) VALUES ($1,$2,$3)
+       ON CONFLICT (profile_id, item_id, step_key) DO NOTHING`,
+      [profile.id, id, req.params.key]);
+    res.status(204).end();
+  }));
+
+  app.delete('/api/items/:id/playbook/steps/:key', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(404).json({ error: 'not found' });
+    const profile = await resolveProfile(req);
+    if (!profile) return res.status(400).json({ error: 'X-Profile-Id required' });
+
+    await store.run(
+      'DELETE FROM playbook_step_state WHERE profile_id = $1 AND item_id = $2 AND step_key = $3',
+      [profile.id, id, req.params.key]);
+    res.status(204).end();
   }));
 
   // Model-derived "possibly related story" suggestions. Separate from /clusters/:id/items,

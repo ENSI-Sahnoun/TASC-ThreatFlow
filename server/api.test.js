@@ -828,3 +828,131 @@ test('relevance is null when no profile is active', async () => {
     assert.strictEqual(res.body.relevance, null);
   } finally { await cleanup(); }
 });
+
+// --- Playbooks ---
+
+async function seedPlaybookItem(store) {
+  const src = await store.get(
+    "INSERT INTO sources (name, fetch_kind, active) VALUES ('S','json_api',true) RETURNING id");
+  const item = await store.get(
+    `INSERT INTO items (source_id, category, title, external_id, cvss_vector, published_at)
+     VALUES ($1,'cve','FortiOS RCE','CVE-2026-40','CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H', now() - interval '1 days')
+     RETURNING id`, [src.id]);
+  await store.run("INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [item.id]);
+  await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-40')", [item.id]);
+  await store.run(`INSERT INTO cve_intel (cve_id, severity, kev_listed) VALUES ('CVE-2026-40','critical',true)`);
+  return item.id;
+}
+
+const PLAYBOOK_PROFILE = {
+  name: 'p', sector: 'finance', vendors: [], products: [], threatDomains: [], severityFloor: 'medium',
+  assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'internet' }],
+};
+
+test('GET /api/items/:id includes a playbook once a matching profile is active', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPlaybookItem(store);
+    const p = await send(app, 'POST', '/api/profiles', PLAYBOOK_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', `/api/items/${itemId}`, null, { 'X-Profile-Id': String(p.body.id) });
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.playbook.steps));
+    assert.ok(res.body.playbook.steps.some((s) => s.key === 'confirm'));
+    assert.deepStrictEqual(res.body.playbook.done, []);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id returns playbook: null with no active profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const itemId = await seedPlaybookItem(store);
+    const res = await get(createApp(store), `/api/items/${itemId}`);
+    assert.strictEqual(res.body.playbook, null);
+  } finally { await cleanup(); }
+});
+
+test('POST then DELETE a playbook step round-trips through done[]', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPlaybookItem(store);
+    const p = await send(app, 'POST', '/api/profiles', PLAYBOOK_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(p.body.id) };
+
+    const tick = await send(app, 'POST', `/api/items/${itemId}/playbook/steps/confirm`, {}, hdr);
+    assert.strictEqual(tick.status, 204);
+
+    const afterTick = await send(app, 'GET', `/api/items/${itemId}`, null, hdr);
+    assert.deepStrictEqual(afterTick.body.playbook.done, ['confirm']);
+
+    const untick = await send(app, 'DELETE', `/api/items/${itemId}/playbook/steps/confirm`, null, hdr);
+    assert.strictEqual(untick.status, 204);
+
+    const afterUntick = await send(app, 'GET', `/api/items/${itemId}`, null, hdr);
+    assert.deepStrictEqual(afterUntick.body.playbook.done, []);
+  } finally { await cleanup(); }
+});
+
+test('POST an unknown step_key returns 404 and stores nothing', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPlaybookItem(store);
+    const p = await send(app, 'POST', '/api/profiles', PLAYBOOK_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(p.body.id) };
+
+    const res = await send(app, 'POST', `/api/items/${itemId}/playbook/steps/not-a-real-step`, {}, hdr);
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual((await store.all('SELECT 1 FROM playbook_step_state')).length, 0);
+  } finally { await cleanup(); }
+});
+
+test('POST a playbook step with no active profile returns 400', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPlaybookItem(store);
+    const res = await send(app, 'POST', `/api/items/${itemId}/playbook/steps/confirm`, {});
+    assert.strictEqual(res.status, 400);
+  } finally { await cleanup(); }
+});
+
+test('POST /api/profiles/:id/playbooks/word returns 202 and 404 for unknown ids', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const p = await send(app, 'POST', '/api/profiles', {
+      name: 'p', sector: 'finance', vendors: [], products: [], threatDomains: [], severityFloor: 'medium',
+    });
+    assert.strictEqual((await send(app, 'POST', `/api/profiles/${p.body.id}/playbooks/word`)).status, 202);
+    assert.strictEqual((await send(app, 'POST', '/api/profiles/999/playbooks/word')).status, 404);
+  } finally { await cleanup(); }
+});
+
+// playbook_step_state is deliberately not keyed by profile_version — a tick is a statement
+// about the real world, and PUT /api/profiles/:id bumps profile_version on every edit.
+test('a ticked step survives a PUT /api/profiles/:id that bumps profile_version', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPlaybookItem(store);
+    const created = await send(app, 'POST', '/api/profiles', PLAYBOOK_PROFILE);
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(created.body.id) };
+    await send(app, 'POST', `/api/items/${itemId}/playbook/steps/confirm`, {}, hdr);
+
+    // Bump profile_version by editing an unrelated field.
+    await send(app, 'PUT', `/api/profiles/${created.body.id}`, {
+      ...PLAYBOOK_PROFILE, sector: 'healthcare',
+    });
+    await send(app, 'POST', `/api/profiles/${created.body.id}/relevance/recompute`);
+
+    const res = await send(app, 'GET', `/api/items/${itemId}`, null, hdr);
+    assert.deepStrictEqual(res.body.playbook.done, ['confirm']);
+  } finally { await cleanup(); }
+});
