@@ -191,4 +191,7 @@ async function generateProse(store, profileId, { judge = judgeText, model = DEFA
   return { considered: pending.length, written, failed };
 }
 
-module.exports = { generateProse, buildPrompt, templateSentence, isUsableSentence, PROSE_TIERS };
+module.exports = {
+  generateProse, buildPrompt, templateSentence, isUsableSentence, PROSE_TIERS,
+  SCAFFOLD_RE, BREACH_CLAIM_RE,
+};
