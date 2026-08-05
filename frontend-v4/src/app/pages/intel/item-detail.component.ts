@@ -6,7 +6,6 @@ import { ApiService } from '../../core/api.service';
 import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { ImpactPanelComponent } from '../../ui/impact-panel.component';
-import { PlaybookPanelComponent } from '../../ui/playbook-panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import { SourceDotComponent } from '../../ui/source-dot.component';
@@ -14,9 +13,11 @@ import { ChipComponent } from '../../ui/chip.component';
 import { CopyButtonComponent } from '../../ui/copy-button.component';
 import { BrowserWindowComponent } from '../../ui/browser-window.component';
 import { RecordCardComponent } from '../../ui/record-card.component';
+import { RemediationWidgetComponent } from '../../ui/remediation-widget.component';
 import { relativeTime, stripHtml } from '../../core/format';
 import { tierLabel, explanation, isModelWritten } from '../../core/relevance';
-import type { ItemDetail, RelatedStory } from '../../core/models';
+import { matchingGroup } from '../../core/remediation';
+import type { ItemDetail, RelatedStory, RemediationDetail, RemediationQueueGroup } from '../../core/models';
 
 interface EntityLink { key: string; label: string; path: string[]; }
 
@@ -30,8 +31,9 @@ interface EntityLink { key: string; label: string; path: string[]; }
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink, PanelComponent, ImpactPanelComponent, PlaybookPanelComponent, EmptyStateComponent, SkeletonComponent,
+    RouterLink, PanelComponent, ImpactPanelComponent, EmptyStateComponent, SkeletonComponent,
     SourceDotComponent, ChipComponent, CopyButtonComponent, BrowserWindowComponent, RecordCardComponent,
+    RemediationWidgetComponent,
   ],
   template: `
     @if (detail(); as d) {
@@ -81,9 +83,11 @@ interface EntityLink { key: string; label: string; path: string[]; }
         <tf-impact-panel [relevance]="rel" />
       }
 
-      @if (d.playbook; as pb) {
-        <tf-playbook-panel [playbook]="pb" [itemId]="d.id" [dueDate]="d.relevance?.consequence?.urgency?.due ?? null" />
-      }
+      <tf-remediation-widget
+        [remediation]="remediation()?.remediation ?? null"
+        [group]="remediationGroup()"
+        [itemId]="d.id"
+      />
 
       <tf-panel title="Entities">
         @if (entities().length === 0 && d.domains.length === 0) {
@@ -325,6 +329,13 @@ export class ItemDetailComponent {
   related = signal<RelatedStory[]>([]);
   private expandedIps = signal<Set<string>>(new Set());
 
+  // Part 9's widget state. Fetched independently of `detail` (a different route,
+  // GET /api/items/:id/remediation) and only when a profile is active — the widget renders
+  // nothing at all rather than an error state when there's no profile or no matching asset,
+  // the same "no panel when there's nothing to say" posture "Possibly related" already uses.
+  remediation = signal<RemediationDetail | null>(null);
+  remediationGroup = signal<RemediationQueueGroup | null>(null);
+
   relativeTime = relativeTime;
   tierLabel = tierLabel;
   explanation = explanation;
@@ -357,6 +368,8 @@ export class ItemDetailComponent {
       this.detail.set(null);
       this.related.set([]);
       this.expandedIps.set(new Set());
+      this.remediation.set(null);
+      this.remediationGroup.set(null);
       this.loadDetail();
     });
 
@@ -383,6 +396,7 @@ export class ItemDetailComponent {
         // something to fetch. No panel is rendered when there are no links — an empty-state
         // placeholder would advertise a feature that has nothing to say about this item.
         if (d.clusterId != null && d.relatedStoryCount > 0) this.loadRelated(d.clusterId);
+        this.loadRemediation();
       },
       error: (err: HttpErrorResponse) => {
         this.loading.set(false);
@@ -416,6 +430,29 @@ export class ItemDetailComponent {
     this.api.relatedStories(clusterId).subscribe({
       next: (rows) => this.related.set(rows),
       error: () => { /* no panel — a suggestion that cannot load is not worth reporting */ },
+    });
+  }
+
+  private loadRemediation(): void {
+    this.remediation.set(null);
+    this.remediationGroup.set(null);
+    const profile = this.profileService.active();
+    if (!profile) return; // No profile: the widget stays hidden, not an error state.
+    this.api.itemRemediation(this.id).subscribe({
+      next: (r) => {
+        this.remediation.set(r);
+        if (r.asset) this.loadRemediationGroup(r.asset);
+      },
+      error: () => { /* No CVE data, or the item-remediation route 404s — widget stays hidden. */ },
+    });
+  }
+
+  private loadRemediationGroup(asset: { vendor: string; product: string }): void {
+    const profile = this.profileService.active();
+    if (!profile) return;
+    this.api.remediationQueue(profile.id).subscribe({
+      next: (groups) => this.remediationGroup.set(matchingGroup(groups, asset)),
+      error: () => { /* Progress ring just doesn't render — the headline/count still will. */ },
     });
   }
 
