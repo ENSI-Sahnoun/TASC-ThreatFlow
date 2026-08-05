@@ -5,16 +5,29 @@ import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
+import { severityToken } from '../../core/format';
 import {
   queueSummary, groupProgress, groupHasPastDue, oneUpgradeCloses, closesWording, formatDueDate,
+  groupActions, sortActions, splitActionsByStatus, NOT_COVERED_SECTION_CAVEAT,
+  fixWording,
 } from '../../core/remediation';
+import type { RemediationAction } from '../../core/remediation';
 import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/models';
 
-// The routed "/remediate" page: every asset the active profile has told us about, grouped, each
-// carrying its open threats. Grouping and within-group sort are Spec A's own SQL (server/index.js)
-// — this component adds only what the backend cannot: the "one upgrade closes N" annotation and
-// the header summary, both pure functions from core/remediation.ts (see that file's spec for the
-// full rule set).
+// One rendered section of an asset's actions once a version is known (Part 2) — 'Still affects
+// you' / "Can't tell from your version" / 'No longer in range', each carrying only the actions
+// that belong there. Empty sections are omitted rather than rendered blank.
+interface ActionSectionView {
+  label: string;
+  caveat: string | null;
+  actions: RemediationAction[];
+}
+
+// The routed "/remediate" page. Grouping and within-group sort by score are Spec A's own SQL
+// (server/index.js) — everything from here down is the triage redesign: threats collapse into
+// fix-based action rows (Part 1), ranked by worst CVSS with KEV overriding score (Part 3), split
+// three ways once a version is known (Part 2). All of it is pure functions from
+// core/remediation.ts; this component stays a thin binding over them.
 @Component({
   selector: 'tf-page-remediate',
   standalone: true,
@@ -59,15 +72,100 @@ import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/mod
               </div>
               @if (g.version) { <p class="running">you run {{ g.version }}</p> }
               @if (closesLine(g); as line) { <p class="closes">&#9656; {{ line }}</p> }
-              <ul class="items">
-                @for (item of g.items; track item.itemId) {
-                  <li>
-                    <a [routerLink]="['/remediate', item.itemId]">{{ item.title }}</a>
-                    <span class="status" [class]="'status-' + item.status">{{ statusLabel(item.status) }}</span>
-                    @if (item.dueDate) { <span class="due">fix by {{ formatDueDate(item.dueDate) }}</span> }
-                  </li>
+
+              @if (sectionsFor(g); as sections) {
+                @for (section of sections; track section.label) {
+                  <div class="section">
+                    <p class="section-head">{{ section.label }}</p>
+                    @if (section.caveat) { <p class="section-caveat">{{ section.caveat }}</p> }
+                    <ul class="actions">
+                      @for (a of section.actions; track a.key) {
+                        <li class="action-row" [style.--stripe]="stripeColor(a)">
+                          @if (a.kev; as kev) {
+                            <span class="kev-badge">
+                              KEV
+                              @if (kev.pastDueCount > 0) { &middot; {{ kev.pastDueCount }} past due }
+                              @if (kev.ransomware) { &middot; ransomware }
+                            </span>
+                          }
+                          <div class="action-main">
+                            <span class="headline">{{ fixHeadline(a) }}</span>
+                            <span class="count tabular-nums">{{ a.count }} threat{{ a.count === 1 ? '' : 's' }}</span>
+                            @if (a.worstScore != null) {
+                              <span class="worst tabular-nums">
+                                {{ a.worstScore }}@if (a.worstVersion) { <span class="ver">v{{ a.worstVersion }}</span> }
+                              </span>
+                            }
+                          </div>
+                          <div class="dist">
+                            @for (band of severityBands; track band) {
+                              @if (a.severityCounts[band] > 0) {
+                                <span class="seg" [style.flexGrow]="a.severityCounts[band]" [style.background]="bandColor(band)"
+                                  [attr.title]="band + ': ' + a.severityCounts[band]"></span>
+                              }
+                            }
+                          </div>
+                          <details class="disclosure">
+                            <summary>{{ a.count }} CVE{{ a.count === 1 ? '' : 's' }}</summary>
+                            <ul class="cves">
+                              @for (item of a.items; track item.itemId) {
+                                <li>
+                                  <a [routerLink]="['/remediate', item.itemId]">{{ item.cveId || item.title }}</a>
+                                  <span class="status" [class]="'status-' + item.status">{{ statusLabel(item.status) }}</span>
+                                  @if (item.dueDate) { <span class="due">fix by {{ formatDueDate(item.dueDate) }}</span> }
+                                </li>
+                              }
+                            </ul>
+                          </details>
+                        </li>
+                      }
+                    </ul>
+                  </div>
                 }
-              </ul>
+              } @else {
+                <ul class="actions">
+                  @for (a of actionsOf(g); track a.key) {
+                    <li class="action-row" [style.--stripe]="stripeColor(a)">
+                      @if (a.kev; as kev) {
+                        <span class="kev-badge">
+                          KEV
+                          @if (kev.pastDueCount > 0) { &middot; {{ kev.pastDueCount }} past due }
+                          @if (kev.ransomware) { &middot; ransomware }
+                        </span>
+                      }
+                      <div class="action-main">
+                        <span class="headline">{{ fixHeadline(a) }}</span>
+                        <span class="count tabular-nums">{{ a.count }} threat{{ a.count === 1 ? '' : 's' }}</span>
+                        @if (a.worstScore != null) {
+                          <span class="worst tabular-nums">
+                            {{ a.worstScore }}@if (a.worstVersion) { <span class="ver">v{{ a.worstVersion }}</span> }
+                          </span>
+                        }
+                      </div>
+                      <div class="dist">
+                        @for (band of severityBands; track band) {
+                          @if (a.severityCounts[band] > 0) {
+                            <span class="seg" [style.flexGrow]="a.severityCounts[band]" [style.background]="bandColor(band)"
+                              [attr.title]="band + ': ' + a.severityCounts[band]"></span>
+                          }
+                        }
+                      </div>
+                      <details class="disclosure">
+                        <summary>{{ a.count }} CVE{{ a.count === 1 ? '' : 's' }}</summary>
+                        <ul class="cves">
+                          @for (item of a.items; track item.itemId) {
+                            <li>
+                              <a [routerLink]="['/remediate', item.itemId]">{{ item.cveId || item.title }}</a>
+                              <span class="status" [class]="'status-' + item.status">{{ statusLabel(item.status) }}</span>
+                              @if (item.dueDate) { <span class="due">fix by {{ formatDueDate(item.dueDate) }}</span> }
+                            </li>
+                          }
+                        </ul>
+                      </details>
+                    </li>
+                  }
+                </ul>
+              }
             </li>
           }
         </ul>
@@ -90,18 +188,41 @@ import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/mod
     .count { font-size: var(--fs-xs); color: var(--ink-2); }
     .tell-us { font-size: var(--fs-xs); color: var(--accent); text-decoration: none; }
     .tell-us:hover { text-decoration: underline; }
-    .past-due {
-      margin-left: auto; font-size: var(--fs-xs); font-weight: 600; color: var(--sev-critical);
-    }
+    .past-due { margin-left: auto; font-size: var(--fs-xs); font-weight: 600; color: var(--sev-critical); }
     .running { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--ink-2); }
     .closes { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--ink); }
-    .items { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-    .items li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-    .items a { color: var(--ink); text-decoration: none; font-size: var(--fs-sm); }
-    .items a:hover { color: var(--accent); }
-    .status { font-size: var(--fs-xs); color: var(--ink-2); }
+
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+
+    .section { margin-top: 12px; }
+    .section-head { margin: 0 0 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: .02em; }
+    .section-caveat { margin: 0 0 8px; font-size: var(--fs-xs); color: var(--ink-2); font-style: italic; }
+    .actions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+
+    .action-row {
+      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px 12px;
+      padding: 6px 0 6px 10px; border-left: 3px solid var(--stripe, var(--sev-unknown));
+    }
+    .kev-badge {
+      grid-column: 1; font-size: var(--fs-xs); font-weight: 700; color: var(--bg);
+      background: var(--sev-critical); padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    }
+    .action-main { grid-column: 2; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+    .headline { color: var(--ink); font-size: var(--fs-sm); }
+    .worst { font-size: var(--fs-xs); color: var(--ink-2); }
+    .ver { margin-left: 3px; font-size: 10px; color: var(--ink-2); }
+    .dist { grid-column: 3; display: flex; width: 80px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-3); }
+    .seg { display: block; }
+    .disclosure { grid-column: 1 / -1; }
+    .disclosure summary { cursor: pointer; font-size: var(--fs-xs); color: var(--ink-2); }
+    .cves { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+    .cves li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-family: ui-monospace, monospace; font-size: var(--fs-xs); }
+    .cves a { color: var(--ink); text-decoration: none; }
+    .cves a:hover { color: var(--accent); }
+    .status { font-family: inherit; color: var(--ink-2); }
     .status-not_covered { color: var(--sev-none); }
-    .due { font-size: var(--fs-xs); color: var(--ink-2); margin-left: auto; }
+    .due { margin-left: auto; color: var(--ink-2); }
+
     .cta { display: inline-block; margin-top: 8px; font-size: var(--fs-sm); color: var(--accent); text-decoration: none; }
     .cta:hover { text-decoration: underline; }
     .err { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; text-align: center; }
@@ -123,10 +244,9 @@ export class RemediationQueueComponent {
   summary = computed(() => queueSummary(this.groups()));
 
   formatDueDate = formatDueDate;
+  severityBands = ['critical', 'high', 'medium', 'low', 'none', 'unknown'] as const;
 
   constructor() {
-    // No route param to combine with, unlike explorer/item-detail — the effect's own creation
-    // run IS the initial load, so there is no "skip the first run" guard needed here.
     effect(() => {
       this.profileService.dataVersion();
       const profile = this.profileService.active();
@@ -156,6 +276,37 @@ export class RemediationQueueComponent {
 
   closesLine(g: RemediationQueueGroup): string | null {
     return closesWording(oneUpgradeCloses(g.items));
+  }
+
+  // Part 3's default: risk order (worst CVSS descending, count breaking ties, KEV first
+  // regardless). Task 13 adds the reach toggle on top of this.
+  actionsOf(g: RemediationQueueGroup): RemediationAction[] {
+    return sortActions(groupActions(g.items));
+  }
+
+  // Part 2: only once a version is known is there anything to split — before that there is one
+  // bucket and no section chrome, so this returns null and the template falls back to the flat
+  // actionsOf() list. Empty sections are dropped rather than rendered with no rows.
+  sectionsFor(g: RemediationQueueGroup): ActionSectionView[] | null {
+    if (g.versionState !== 'known') return null;
+    const s = splitActionsByStatus(this.actionsOf(g));
+    const views: ActionSectionView[] = [];
+    if (s.affected.length) views.push({ label: 'Still affects you', caveat: null, actions: s.affected });
+    if (s.unknown.length) views.push({ label: "Can't tell from your version", caveat: null, actions: s.unknown });
+    if (s.notCovered.length) views.push({ label: 'No longer in range', caveat: NOT_COVERED_SECTION_CAVEAT, actions: s.notCovered });
+    return views;
+  }
+
+  fixHeadline(a: RemediationAction): string {
+    return fixWording(a.fix).headline;
+  }
+
+  stripeColor(a: RemediationAction): string {
+    return severityToken(a.worstSeverity);
+  }
+
+  bandColor(band: string): string {
+    return severityToken(band);
   }
 
   statusLabel(status: RemediationQueueItem['status']): string {
