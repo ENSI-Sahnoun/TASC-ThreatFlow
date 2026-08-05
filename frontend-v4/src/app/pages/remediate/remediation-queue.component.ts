@@ -165,11 +165,29 @@ const CVE_PAGE_SIZE = 8;
                                 }
                               </dl>
                             </details>
-                            <tf-copy-button [value]="ticketTextOf(a, g)" label="Copy as ticket" />
+                            <div class="action-buttons">
+                              @if (a.fix.kind === 'version') {
+                                <button
+                                  type="button" class="upgraded-btn" [disabled]="isSaving(a.key)"
+                                  (click)="confirmUpgrade(a, g)"
+                                >
+                                  {{ isSaving(a.key) ? 'Recording…' : "I've upgraded — record " + a.fix.value }}
+                                </button>
+                              }
+                              <tf-copy-button [value]="ticketTextOf(a, g)" label="Copy as ticket" />
+                            </div>
+                            @if (saveError(a.key); as err) { <p class="save-error">{{ err }}</p> }
                             <ul class="cves">
                               @for (item of visibleCves(a); track item.itemId) {
                                 <li>
                                   <a [routerLink]="['/remediate', item.itemId]">{{ item.cveId || item.title }}</a>
+                                  @if (item.cvssScore != null) {
+                                    <span class="cve-score" [style.background]="bandColor(item.severity ?? 'unknown')">{{ item.cvssScore }}</span>
+                                  }
+                                  @if (item.kevListed) {
+                                    <span class="cve-kev">KEV{{ item.kevDueDate ? ' due ' + formatDueDate(item.kevDueDate) : '' }}</span>
+                                  }
+                                  @if (item.kevRansomware) { <span class="cve-ransomware">ransomware</span> }
                                   <span class="status" [class]="'status-' + item.status">{{ statusLabel(item.status) }}</span>
                                   @if (item.dueDate) { <span class="due">fix by {{ formatDueDate(item.dueDate) }}</span> }
                                 </li>
@@ -274,10 +292,31 @@ const CVE_PAGE_SIZE = 8;
     .prov dt { color: var(--ink-2); min-width: 90px; }
     .prov dd { margin: 0; color: var(--ink); }
 
+    .action-buttons { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .upgraded-btn {
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
+      color: var(--bg); background: var(--accent); border: 0; padding: 7px 14px; border-radius: 8px;
+      transition: opacity var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
+    }
+    .upgraded-btn:hover:not(:disabled) { opacity: .9; }
+    .upgraded-btn:active:not(:disabled) { transform: scale(.97); }
+    .upgraded-btn:disabled { opacity: .55; cursor: default; }
+    .upgraded-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .save-error { margin: 0; font-size: var(--fs-xs); color: var(--sev-critical); }
+    @media (prefers-reduced-motion: reduce) { .upgraded-btn { transition: none; } }
+
     .cves { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
-    .cves li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-family: ui-monospace, monospace; font-size: var(--fs-xs); }
+    .cves li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-family: ui-monospace, monospace; font-size: var(--fs-xs); }
     .cves a { color: var(--ink); text-decoration: none; border-bottom: 1px solid transparent; }
     .cves a:hover { color: var(--accent); border-bottom-color: currentColor; }
+    .cve-score {
+      font-family: inherit; font-weight: 700; color: var(--bg); line-height: 1;
+      padding: 2px 6px; border-radius: 4px;
+    }
+    .cve-kev, .cve-ransomware {
+      font-family: inherit; font-weight: 700; color: var(--bg); line-height: 1;
+      background: var(--sev-critical); padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    }
     .status { font-family: inherit; color: var(--ink-2); }
     .status-not_covered { color: var(--sev-none); }
     .due { margin-left: auto; color: var(--ink-2); }
@@ -336,6 +375,11 @@ export class RemediationQueueComponent {
   // whenever the queue reloads (a stale key from a prior response would just miss every match).
   private openKeys = signal<Set<string>>(new Set());
   private expandedCveKeys = signal<Set<string>>(new Set());
+  // In-flight "I've upgraded" writes and their errors, keyed by RemediationAction.key — several
+  // actions across different assets could plausibly be mid-save at once, so this isn't a single
+  // shared flag the way the guided page's one-form version state can be.
+  private savingKeys = signal<Set<string>>(new Set());
+  private saveErrors = signal<Map<string, string>>(new Map());
 
   constructor() {
     effect(() => {
@@ -353,6 +397,8 @@ export class RemediationQueueComponent {
     this.error.set(false);
     this.openKeys.set(new Set());
     this.expandedCveKeys.set(new Set());
+    this.savingKeys.set(new Set());
+    this.saveErrors.set(new Map());
     this.api.remediationQueue(profile.id).subscribe({
       next: (rows) => { this.groups.set(rows); this.loading.set(false); },
       error: () => { this.error.set(true); this.loading.set(false); },
@@ -401,6 +447,46 @@ export class RemediationQueueComponent {
 
   visibleCves(a: RemediationAction): RemediationQueueItem[] {
     return this.isExpandedCves(a.key) ? a.items : a.items.slice(0, CVE_PAGE_SIZE);
+  }
+
+  isSaving(key: string): boolean {
+    return this.savingKeys().has(key);
+  }
+
+  saveError(key: string): string | null {
+    return this.saveErrors().get(key) ?? null;
+  }
+
+  // Records the action's own fix target as the asset's version — the same write the guided
+  // page's confirmVersionBump makes, just reachable straight from the queue row instead of
+  // requiring a trip through one item's guided page first. A full load() afterward is what
+  // actually shows the consequence: the action's items flip to not_covered and the row moves
+  // section, the same feedback the version-form save on the guided page relies on.
+  confirmUpgrade(a: RemediationAction, g: RemediationQueueGroup): void {
+    if (a.fix.kind !== 'version' || this.isSaving(a.key)) return;
+    const profile = this.profileService.active();
+    if (!profile) return;
+
+    const saving = new Set(this.savingKeys());
+    saving.add(a.key);
+    this.savingKeys.set(saving);
+    const errors = new Map(this.saveErrors());
+    errors.delete(a.key);
+    this.saveErrors.set(errors);
+
+    this.api.recordAssetVersion(profile.id, g.vendor, g.product, {
+      version: a.fix.value, versionState: 'known',
+    }).subscribe({
+      next: () => this.load(), // load() clears savingKeys/openKeys wholesale on the fresh response.
+      error: () => {
+        const nextSaving = new Set(this.savingKeys());
+        nextSaving.delete(a.key);
+        this.savingKeys.set(nextSaving);
+        const nextErrors = new Map(this.saveErrors());
+        nextErrors.set(a.key, "Couldn't record that — try again.");
+        this.saveErrors.set(nextErrors);
+      },
+    });
   }
 
   // Part 3's default: risk order (worst CVSS descending, count breaking ties, KEV first
