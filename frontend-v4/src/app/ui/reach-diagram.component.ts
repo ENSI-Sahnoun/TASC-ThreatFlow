@@ -1,28 +1,34 @@
 import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import type { ReachDiagram } from '../core/remediation';
+import { diagramSvgWidth, diagramEdgeLines } from '../core/remediation';
 
-// Step 1's signature diagram: origin -> gate -> outcome, drawn from whatever reachDiagram()
-// (core/remediation.ts) already decided from the CVSS vector. This component owns no logic of
-// its own beyond which node's "why" popover is open — the same idiom tf-impact-panel already
-// uses for its provenance buttons, reused here rather than inventing a second interaction.
+// Step 1's signature diagram: origin -> gate -> outcome, and (when the vector's scope changed)
+// -> scope, drawn from whatever reachDiagram() (core/remediation.ts) already decided from the
+// CVSS vector. This component owns no logic of its own beyond which node's "why" popover is
+// open and which edge annotation is showing — the same idiom tf-impact-panel already uses for
+// its provenance buttons, reused here rather than inventing a second interaction.
 //
-// Inline SVG, no chart library: this is three boxes and two arrows. Horizontal scroll on narrow
-// viewports (own .scroll container) rather than reflowing into an unreadable stack.
+// Inline SVG, no chart library. Node count and edge geometry both come from core/remediation.ts's
+// diagramSvgWidth()/diagramEdgeLines() (Part 7) rather than being hardcoded here, so a fourth
+// node (S:C) places itself correctly without a template change beyond what's already here.
+// Horizontal scroll on narrow viewports (own .scroll container) rather than reflowing into an
+// unreadable stack.
 @Component({
   selector: 'tf-reach-diagram',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="scroll">
-      <svg viewBox="0 0 640 170" [attr.width]="640" [attr.height]="170" role="img" [attr.aria-label]="ariaLabel()">
+      <svg [attr.viewBox]="'0 0 ' + svgWidth() + ' 170'" [attr.width]="svgWidth()" [attr.height]="170" role="img" [attr.aria-label]="ariaLabel()">
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)" />
           </marker>
         </defs>
 
-        <line class="edge" x1="180" y1="55" x2="230" y2="55" marker-end="url(#arrow)" />
-        <line class="edge" x1="420" y1="55" x2="470" y2="55" marker-end="url(#arrow)" />
+        @for (e of edgeLines(); track e.key) {
+          <line class="edge" [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" marker-end="url(#arrow)" />
+        }
 
         @for (n of diagram.nodes; track n.id; let i = $index) {
           <g class="node" [style.animation-delay.ms]="i * 80" [attr.transform]="'translate(' + (i * 240) + ', 0)'">
@@ -37,6 +43,9 @@ import type { ReachDiagram } from '../core/remediation';
 
       @if (diagram.gateAnnotation; as ann) {
         <p class="annotation">{{ ann.from }} — {{ ann.text }}</p>
+      }
+      @if (diagram.acAnnotation; as ac) {
+        <p class="annotation">{{ ac.from }} — {{ ac.text }}</p>
       }
 
       <div class="why-row">
@@ -108,5 +117,13 @@ export class ReachDiagramComponent {
 
   ariaLabel(): string {
     return this.diagram.nodes.map((n) => n.title).join(' leads to ');
+  }
+
+  svgWidth(): number {
+    return diagramSvgWidth(this.diagram);
+  }
+
+  edgeLines() {
+    return diagramEdgeLines(this.diagram);
   }
 }
