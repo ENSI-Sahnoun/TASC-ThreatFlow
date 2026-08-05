@@ -552,3 +552,44 @@ export function diagramEdgeLines(diagram: ReachDiagram): DiagramEdgeLine[] {
     return { key: `${e.from}-${e.to}`, x1: fromIdx * 240 + 180, y1: 55, x2: toIdx * 240 - 10, y2: 55 };
   });
 }
+
+// ---- Part 5: provenance on every action ----
+
+export interface ProvenanceLine {
+  label: string;
+  text: string;
+}
+
+// Part 5's three facts, always in this order: what matched the asset, where the fix came from,
+// how many sources corroborate. Corroboration and the fix source both draw on whichever item set
+// the action's worst-CVSS ranking (see this plan's Spec Accuracy Finding 4) — the same item whose
+// score and severity already anchor the row's headline number, so the panel never explains a
+// different CVE than the one the numeral describes.
+export function actionProvenance(
+  action: RemediationAction,
+  asset: { vendor: string; product: string },
+): ProvenanceLine[] {
+  const lines: ProvenanceLine[] = [
+    { label: 'Matched', text: `${asset.vendor} ${asset.product} (item_cpes)` },
+  ];
+
+  if (action.fix.kind === 'version') {
+    lines.push({ label: 'Fix source', text: `NVD cpeMatch endExcluding: ${action.fix.value}` });
+  } else if (action.fix.kind === 'patch') {
+    const urls = [...new Set(action.items.map((i) => i.patchUrl).filter((u): u is string => !!u))];
+    lines.push({ label: 'Fix source', text: `cve_intel.patch_url: ${urls.join(', ')}` });
+  } else if (action.fix.kind === 'advisory') {
+    lines.push({ label: 'Fix source', text: `cve_intel.advisory_url: ${action.fix.value}` });
+  } else {
+    lines.push({ label: 'Fix source', text: 'No patch or advisory on file for any threat in this action' });
+  }
+
+  const worst = action.items.find((i) => i.cvssScore === action.worstScore) ?? action.items[0];
+  const sourceCount = worst?.sourceCount ?? 0;
+  lines.push({
+    label: 'Corroboration',
+    text: `${sourceCount} independent source${sourceCount === 1 ? '' : 's'}`,
+  });
+
+  return lines;
+}

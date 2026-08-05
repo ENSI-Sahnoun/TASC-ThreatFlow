@@ -653,3 +653,44 @@ describe('diagramEdgeLines', () => {
     expect(lines[2]).toEqual({ key: 'outcome-scope', x1: 660, y1: 55, x2: 710, y2: 55 });
   });
 });
+
+import { actionProvenance } from './remediation';
+
+describe('actionProvenance', () => {
+  const asset = { vendor: 'apple', product: 'macos' };
+
+  it('states what matched the asset first', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' } })])[0];
+    expect(actionProvenance(a, asset)[0]).toEqual({ label: 'Matched', text: 'apple macos (item_cpes)' });
+  });
+  it('names the NVD endExcluding bound for a version fix', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' } })])[0];
+    expect(actionProvenance(a, asset)[1]).toEqual({ label: 'Fix source', text: 'NVD cpeMatch endExcluding: 14.8.8' });
+  });
+  it('lists the distinct patch URLs backing a patch action', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'patch', value: 'https://x/a' }, patchUrl: 'https://x/a' }),
+      item({ itemId: 2, fix: { kind: 'patch', value: 'https://x/b' }, patchUrl: 'https://x/b' }),
+    ])[0];
+    expect(actionProvenance(a, asset)[1].text).toBe('cve_intel.patch_url: https://x/a, https://x/b');
+  });
+  it('names the advisory link for an advisory fix', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'advisory', value: 'https://x/a' } })])[0];
+    expect(actionProvenance(a, asset)[1]).toEqual({ label: 'Fix source', text: 'cve_intel.advisory_url: https://x/a' });
+  });
+  it('states the explicit absence for a none fix', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' } })])[0];
+    expect(actionProvenance(a, asset)[1].text).toMatch(/no patch or advisory/i);
+  });
+  it('reports the worst item\'s source_count as the corroboration line', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'none' }, cvssScore: 9.8, sourceCount: 3 }),
+      item({ itemId: 2, fix: { kind: 'none' }, cvssScore: 5.0, sourceCount: 1 }),
+    ])[0];
+    expect(actionProvenance(a, asset)[2]).toEqual({ label: 'Corroboration', text: '3 independent sources' });
+  });
+  it('singular wording for exactly one source', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' }, sourceCount: 1 })])[0];
+    expect(actionProvenance(a, asset)[2].text).toBe('1 independent source');
+  });
+});
