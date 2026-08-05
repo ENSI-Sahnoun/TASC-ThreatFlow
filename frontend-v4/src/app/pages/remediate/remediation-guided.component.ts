@@ -11,6 +11,7 @@ import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import {
   parseVectorMetrics, reachDiagram, affectedWording, fixWording, countCleared, versionRecordedMessage,
+  isPastDue, formatDueDate,
 } from '../../core/remediation';
 import type { RemediationDetail } from '../../core/models';
 
@@ -27,12 +28,23 @@ import type { RemediationDetail } from '../../core/models';
       <tf-skeleton [rows]="10" />
     } @else if (notFound()) {
       <tf-empty-state title="Item not found" reason="GET /api/items/:id/remediation returned 404" />
-    } @else if (detail(); as d) {
+    } @else if (detail()) {
+      @let d = detail()!;
       <a class="back" [routerLink]="['/intel', d.item.id]">&larr; Back to item</a>
       <h1>{{ d.item.title }}</h1>
 
       <tf-panel title="What this does">
         <tf-reach-diagram [diagram]="diagram()" />
+        @if (d.kevListed) {
+          <p class="kev-badge" [class.past-due]="d.kevDueDate && isPastDue(d.kevDueDate)">
+            Known exploited
+            @if (d.kevRansomware) { &middot; ransomware-associated }
+            @if (d.kevDueDate) {
+              &middot; due {{ formatDueDate(d.kevDueDate) }}
+              @if (isPastDue(d.kevDueDate)) { (past due) }
+            }
+          </p>
+        }
       </tf-panel>
 
       @if (!d.asset) {
@@ -130,6 +142,11 @@ import type { RemediationDetail } from '../../core/models';
     .mitigations .t { font-weight: 600; }
     .note { display: block; margin-top: 6px; font-size: var(--fs-xs); word-break: break-all; }
     .cta { color: var(--accent); }
+    .kev-badge {
+      display: inline-block; margin-top: 8px; font-size: var(--fs-xs); font-weight: 700; color: var(--bg);
+      background: var(--sev-critical); padding: 3px 10px; border-radius: 999px;
+    }
+    .kev-badge.past-due { background: var(--sev-critical); outline: 2px solid var(--sev-critical); outline-offset: 1px; }
   `],
 })
 export class RemediationGuidedComponent {
@@ -149,6 +166,9 @@ export class RemediationGuidedComponent {
 
   metrics = computed(() => parseVectorMetrics(this.detail()?.item.cvss_vector ?? null));
   diagram = computed(() => reachDiagram(this.metrics()));
+
+  isPastDue = isPastDue;
+  formatDueDate = formatDueDate;
 
   verdict = computed(() => {
     const r = this.detail()?.remediation;
