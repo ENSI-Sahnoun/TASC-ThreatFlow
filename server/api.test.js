@@ -957,6 +957,122 @@ test('a ticked step survives a PUT /api/profiles/:id that bumps profile_version'
   } finally { await cleanup(); }
 });
 
+// --- Category playbooks ---
+
+// `domain` defaults to `category` because 'ransomware'/'phishing'/'malware'/'data-breach' are
+// all valid slugs in server/domains.js's fixed list. 'ioc' is not a domain slug at all (domains
+// and categories are separate taxonomies) — callers seeding an ioc-category item must pass a
+// real domain (e.g. 'malware') explicitly for the tier's domain-match to fire.
+async function seedCategoryItem(store, { category, domain = category, title = 'Test item', iocs = [], actors = [], families = [] }) {
+  const src = await store.get(
+    "INSERT INTO sources (name, fetch_kind, active) VALUES ('CS','json_api',true) RETURNING id");
+  const item = await store.get(
+    `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+     VALUES ($1,$2,$3,$4,'medium', now() - interval '1 days') RETURNING id`,
+    [src.id, category, title, `ext-${category}`]);
+  await store.run('INSERT INTO item_domains (item_id, domain) VALUES ($1,$2)', [item.id, domain]);
+  for (const ioc of iocs) {
+    await store.run('INSERT INTO item_iocs (item_id, ioc_type, ioc_value) VALUES ($1,$2,$3)', [item.id, ioc.type, ioc.value]);
+  }
+  for (const a of actors) await store.run('INSERT INTO item_actors (item_id, actor) VALUES ($1,$2)', [item.id, a]);
+  for (const f of families) await store.run('INSERT INTO item_malware_families (item_id, family) VALUES ($1,$2)', [item.id, f]);
+  return item.id;
+}
+
+const categoryProfile = (domain) => ({
+  name: `cat-${domain}`, sector: 'finance', vendors: [], products: [],
+  threatDomains: [domain], severityFloor: 'medium', assets: [],
+});
+
+async function recomputeAndFetch(app, store, itemId, domain) {
+  const p = await send(app, 'POST', '/api/profiles', categoryProfile(domain));
+  await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+  return send(app, 'GET', `/api/items/${itemId}`, null, { 'X-Profile-Id': String(p.body.id) });
+}
+
+test('GET /api/items/:id builds a ransomware playbook with victim, attack-mitigation and block-iocs steps', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, {
+      category: 'ransomware', title: 'Acme Corp (LockBit)',
+      actors: ['LockBit'], iocs: [{ type: 'ip', value: '203.0.113.5' }],
+    });
+    const res = await recomputeAndFetch(app, store, itemId, 'ransomware');
+    assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
+      'ransomware:confirm', 'ransomware:attack-mitigation', 'ransomware:block-iocs',
+      'ransomware:protect-backups', 'ransomware:reset-credentials', 'ransomware:payment-decision',
+    ]);
+    assert.match(res.body.playbook.steps[0].detail, /Acme Corp/);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id builds a phishing playbook, gating report-phishing-url on a url IOC', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, {
+      category: 'phishing', iocs: [{ type: 'url', value: 'https://evil.example/login' }],
+    });
+    const res = await recomputeAndFetch(app, store, itemId, 'phishing');
+    assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
+      'phishing:confirm', 'phishing:block-iocs', 'phishing:report-phishing-url', 'phishing:check-clicked',
+    ]);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id builds a malware playbook with an ATT&CK mitigation for a matched family', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, {
+      category: 'malware', families: ['Emotet'], iocs: [{ type: 'sha256', value: 'a'.repeat(64) }],
+    });
+    const res = await recomputeAndFetch(app, store, itemId, 'malware');
+    assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
+      'malware:confirm', 'malware:attack-mitigation', 'malware:block-iocs', 'malware:isolate-if-found',
+    ]);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id builds a data-breach playbook, gating request-takedown on a url IOC', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, {
+      category: 'data-breach', iocs: [{ type: 'url', value: 'https://leak.example/dump' }],
+    });
+    const res = await recomputeAndFetch(app, store, itemId, 'data-breach');
+    assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
+      'data-breach:confirm', 'data-breach:notify-customers', 'data-breach:request-takedown',
+    ]);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id yields playbook: null for an ioc-category item with zero indicators', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, { category: 'ioc', domain: 'malware' });
+    const res = await recomputeAndFetch(app, store, itemId, 'malware');
+    assert.strictEqual(res.body.playbook, null);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/items/:id builds an ioc playbook once indicators exist', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedCategoryItem(store, {
+      category: 'ioc', domain: 'malware', families: ['Mirai'], iocs: [{ type: 'ip', value: '198.51.100.9' }],
+    });
+    const res = await recomputeAndFetch(app, store, itemId, 'malware');
+    assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
+      'ioc:block-iocs', 'ioc:attack-mitigation', 'ioc:watch-reoccurrence',
+    ]);
+  } finally { await cleanup(); }
+});
+
 // --- Remediation foundation (Spec A): queue route ---
 
 test('GET /api/profiles/:id/remediation groups open threats by asset', async () => {
