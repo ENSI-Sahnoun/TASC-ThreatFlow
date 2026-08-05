@@ -645,3 +645,19 @@ export function actionCountFor(group: RemediationQueueGroup, itemId: number): nu
   const bucket = groupActions(group.items).find((a) => a.items.some((i) => i.itemId === itemId));
   return bucket?.count ?? 1;
 }
+
+// ---- action row subtitle (UI polish pass) ----
+
+// A one-line caption under the headline explaining what kind of fix this is, in plain terms —
+// fixWording()'s own `detail` is empty for 'version'/'none' (Spec B never needed a caption for
+// those on the guided page, where the headline alone was enough). The queue's dense action-row
+// layout needs one for every kind, so this is a separate, deliberately terser companion rather
+// than a change to fixWording's own contract.
+export function actionSubtitle(fix: RemediationFix): string {
+  switch (fix.kind) {
+    case 'version': return 'the fixed build the vendor names';
+    case 'patch': return 'a vendor fix link, no fixed version named';
+    case 'advisory': return 'no direct patch link published — guidance only';
+    case 'none': return 'nothing published yet — mitigate meanwhile';
+  }
+}

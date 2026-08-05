@@ -767,3 +767,20 @@ describe('actionCountFor', () => {
     expect(actionCountFor(group({ items: [] }), 999)).toBe(1);
   });
 });
+
+import { actionSubtitle } from './remediation';
+
+describe('actionSubtitle', () => {
+  it('names the fixed build for a version fix', () => {
+    expect(actionSubtitle({ kind: 'version', value: '14.8.8' })).toBe('the fixed build the vendor names');
+  });
+  it('names a patch link with no fixed version', () => {
+    expect(actionSubtitle({ kind: 'patch', value: 'https://x/a' })).toBe('a vendor fix link, no fixed version named');
+  });
+  it('states advisory-only guidance', () => {
+    expect(actionSubtitle({ kind: 'advisory', value: 'https://x/a' })).toBe('no direct patch link published — guidance only');
+  });
+  it('states nothing published for a none fix', () => {
+    expect(actionSubtitle({ kind: 'none' })).toBe('nothing published yet — mitigate meanwhile');
+  });
+});
