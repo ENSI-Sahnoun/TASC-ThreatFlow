@@ -593,3 +593,35 @@ export function actionProvenance(
 
   return lines;
 }
+
+// ---- Part 6: ticket handoff, plain text only ----
+
+// Clipboard-only, per Part 6's own scope: no ticket-system client, no markup — every tracker
+// accepts plain text.
+export function buildTicketText(action: RemediationAction, asset: { vendor: string; product: string }): string {
+  const headline = action.fix.kind === 'version'
+    ? `Upgrade ${asset.vendor} ${asset.product} to ${action.fix.value} or later`
+    : action.fix.kind === 'patch'
+      ? `Apply the vendor patch for ${asset.vendor} ${asset.product}`
+      : action.fix.kind === 'advisory'
+        ? `Follow vendor guidance for ${asset.vendor} ${asset.product}`
+        : `No fix published yet for ${asset.vendor} ${asset.product}`;
+
+  const lines = [
+    headline,
+    `Closes ${action.count} threat${action.count === 1 ? '' : 's'}`,
+    `Worst severity: ${action.worstSeverity ?? 'unknown'}${action.worstScore != null ? ` (${action.worstScore})` : ''}`,
+  ];
+
+  if (action.kev) {
+    const bits = [`${action.kev.count} listed`];
+    if (action.kev.ransomware) bits.push('ransomware-associated');
+    if (action.kev.pastDueCount > 0) bits.push(`${action.kev.pastDueCount} past due`);
+    lines.push(`KEV: ${bits.join(', ')}`);
+  }
+
+  const cveIds = action.items.map((i) => i.cveId).filter((c): c is string => !!c);
+  lines.push(`CVEs: ${cveIds.length ? cveIds.join(', ') : 'none on file'}`);
+
+  return lines.join('\n');
+}

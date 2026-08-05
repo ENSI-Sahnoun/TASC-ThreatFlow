@@ -694,3 +694,50 @@ describe('actionProvenance', () => {
     expect(actionProvenance(a, asset)[2].text).toBe('1 independent source');
   });
 });
+
+import { buildTicketText } from './remediation';
+
+describe('buildTicketText', () => {
+  const asset = { vendor: 'apple', product: 'macos' };
+
+  it('names the action, count, and worst severity for a version fix', () => {
+    const a = groupActions([item({
+      itemId: 1, fix: { kind: 'version', value: '14.8.8' }, cvssScore: 9.8, severity: 'critical', cveId: 'CVE-2026-1',
+    })])[0];
+    const text = buildTicketText(a, asset);
+    expect(text).toContain('Upgrade apple macos to 14.8.8 or later');
+    expect(text).toContain('Closes 1 threat');
+    expect(text).toContain('Worst severity: critical (9.8)');
+    expect(text).toContain('CVEs: CVE-2026-1');
+  });
+  it('pluralizes "threats" for more than one', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' } }), item({ itemId: 2, fix: { kind: 'none' } })])[0];
+    expect(buildTicketText(a, asset)).toContain('Closes 2 threats');
+  });
+  it('includes a KEV line only when the action has a KEV item, noting ransomware and past-due', () => {
+    const now = new Date('2026-08-04T00:00:00Z');
+    const kevAction = groupActions(
+      [item({ itemId: 1, fix: { kind: 'none' }, kevListed: true, kevRansomware: true, kevDueDate: '2024-12-03' })],
+      now,
+    )[0];
+    expect(buildTicketText(kevAction, asset)).toContain('KEV: 1 listed, ransomware-associated, 1 past due');
+
+    const plainAction = groupActions([item({ itemId: 1, fix: { kind: 'none' } })])[0];
+    expect(buildTicketText(plainAction, asset)).not.toContain('KEV:');
+  });
+  it('lists every CVE id in the bundle', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'version', value: '1.0' }, cveId: 'CVE-2026-1' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '1.0' }, cveId: 'CVE-2026-2' }),
+    ])[0];
+    expect(buildTicketText(a, asset)).toContain('CVEs: CVE-2026-1, CVE-2026-2');
+  });
+  it('states "none on file" rather than an empty list when no item carries a CVE id', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' }, cveId: null })])[0];
+    expect(buildTicketText(a, asset)).toContain('CVEs: none on file');
+  });
+  it('is plain text with no markup', () => {
+    const a = groupActions([item({ itemId: 1, fix: { kind: 'none' } })])[0];
+    expect(buildTicketText(a, asset)).not.toMatch(/[<>{}]/);
+  });
+});
