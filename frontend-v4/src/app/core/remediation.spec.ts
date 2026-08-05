@@ -220,6 +220,14 @@ describe('reachDiagram', () => {
     expect(d.nodes[2].title).toBe('read, change and shut down');
     expect(d.nodes[2].from).toBe('C:H/I:H/A:H');
   });
+  it('outcome detail names the CIA-triad category behind each verb, not the verbs again', () => {
+    const d = reachDiagram({ C: 'H', I: 'H', A: 'H' });
+    expect(d.nodes[2].detail).toBe('Confidentiality (full), Integrity (full) and Availability (full)');
+  });
+  it('outcome detail marks an L-valued metric partial', () => {
+    const d = reachDiagram({ C: 'H', I: 'L' });
+    expect(d.nodes[2].detail).toBe('Confidentiality (full) and Integrity (partial)');
+  });
   it('a single H metric produces a single verb', () => {
     expect(reachDiagram({ C: 'H' }).nodes[2].title).toBe('read');
   });

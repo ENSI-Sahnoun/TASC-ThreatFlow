@@ -162,6 +162,10 @@ const UI_ANNOTATION: Record<string, string> = {
 // panel never describe the same H metric two different ways.
 const OUTCOME_VERBS: Record<string, string> = { C: 'read', I: 'change', A: 'shut down' };
 
+// The formal CVSS impact category behind each verb — the detail line's job is to name these,
+// not to restate the verbs the title already gives.
+const CIA_LABELS: Record<string, string> = { C: 'Confidentiality', I: 'Integrity', A: 'Availability' };
+
 function joinVerbs(values: string[]): string {
   if (values.length === 1) return values[0];
   return `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}`;
@@ -188,20 +192,20 @@ function gateNode(pr: string | undefined): DiagramNode {
 // verb — dropped entirely, same as before.
 function outcomeNode(metrics: Record<string, string>): DiagramNode {
   const parts: string[] = [];
+  const cia: string[] = [];
   const from: string[] = [];
   for (const key of ['C', 'I', 'A']) {
     const value = metrics[key];
-    if (value === 'H') { parts.push(OUTCOME_VERBS[key]); from.push(`${key}:H`); }
-    else if (value === 'L') { parts.push(`partly ${OUTCOME_VERBS[key]}`); from.push(`${key}:L`); }
+    if (value === 'H') { parts.push(OUTCOME_VERBS[key]); cia.push(`${CIA_LABELS[key]} (full)`); from.push(`${key}:H`); }
+    else if (value === 'L') { parts.push(`partly ${OUTCOME_VERBS[key]}`); cia.push(`${CIA_LABELS[key]} (partial)`); from.push(`${key}:L`); }
   }
   if (!parts.length) {
     return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector states what it reads, changes or shuts down', from: 'C/I/A' };
   }
-  // Unlike origin/gate, the title here already IS the plain-language fact (the verb list) — a
-  // detail line repeating it verbatim said nothing new. This one instead names the box's role
-  // in the sequence (what a successful attempt walks away with), the same way "Already on the
-  // machine" (title) is glossed by "Requires local access..." (detail: what that implies).
-  return { id: 'outcome', title: joinVerbs(parts), detail: 'What a successful attempt gets them', from: from.join('/') };
+  // The title is the plain-language verb list; the detail names the formal CVSS impact category
+  // behind each one (Confidentiality/Integrity/Availability, full or partial per H/L) — real,
+  // vector-derived information a technical reader can act on, not a restatement of the title.
+  return { id: 'outcome', title: joinVerbs(parts), detail: joinVerbs(cia), from: from.join('/') };
 }
 
 // AC:L means the exploit works whenever it's tried; AC:H means the attacker needs conditions to

@@ -27,7 +27,10 @@ import { diagramSvgWidth, diagramEdgeLines, DIAGRAM_SLOT_WIDTH } from '../core/r
         </defs>
 
         @for (e of edgeLines(); track e.key) {
-          <line class="edge" [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" marker-end="url(#arrow)" />
+          <line
+            class="edge" [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" marker-end="url(#arrow)"
+            [attr.stroke-dasharray]="e.x2 - e.x1" [attr.stroke-dashoffset]="e.x2 - e.x1"
+          />
         }
 
         @for (n of diagram.nodes; track n.id; let i = $index) {
@@ -79,8 +82,10 @@ import { diagramSvgWidth, diagramEdgeLines, DIAGRAM_SLOT_WIDTH } from '../core/r
     .edge {
       stroke: var(--ink-2);
       stroke-width: 1.5;
-      stroke-dasharray: 60;
-      stroke-dashoffset: 60;
+      /* stroke-dasharray/stroke-dashoffset are bound per-edge in the template to the edge's own
+         length (e.x2 - e.x1) — a fixed CSS value here would only draw correctly for whatever
+         node spacing happened to match it at the time, and silently break (a short dash then a
+         gap before the arrowhead) the next time DIAGRAM_SLOT_WIDTH changes. */
       animation: draw 300ms var(--ease-out) forwards;
       animation-delay: 160ms;
     }
