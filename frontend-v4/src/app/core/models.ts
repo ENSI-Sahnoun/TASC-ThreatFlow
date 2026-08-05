@@ -362,6 +362,18 @@ export interface RemediationQueueItem extends RemediationSummary {
   // Finding 3) — never inside `fix` itself. Only rendered by the UI when fix.kind === 'version'
   // (the spec's "patch link beneath the upgrade instruction, if one exists").
   patchUrl: string | null;
+  // The following eight fields are Part 8 of the triage redesign — six read straight
+  // off cve_intel (never re-derived client-side, see server/cvss.js's severityFromScore), one
+  // (cveId) free from the same LATERAL join, one (cvssVersion) from the item's own column
+  // because cve_intel carries no version — see that plan's Spec Accuracy Findings 1-2.
+  cveId: string | null;
+  cvssScore: number | null;
+  cvssVersion: string | null;
+  severity: string | null;
+  kevListed: boolean;
+  kevDueDate: string | null;
+  kevRansomware: boolean;
+  sourceCount: number;
 }
 
 // One element of GET /api/profiles/:id/remediation's response array — one profile_assets row
@@ -408,6 +420,16 @@ export interface RemediationDetail {
   // (Spec Accuracy Finding 3): a sibling of `remediation`, shown by the UI only when
   // remediation.fix.kind === 'version'.
   patchUrl: string | null;
+  // Same eight fields and same reasoning as RemediationQueueItem (triage redesign, Part 8) —
+  // powers the guided page's KEV block.
+  cveId: string | null;
+  cvssScore: number | null;
+  cvssVersion: string | null;
+  severity: string | null;
+  kevListed: boolean;
+  kevDueDate: string | null;
+  kevRansomware: boolean;
+  sourceCount: number;
 }
 
 // Model-assigned signal quality. Purely advisory: a non-intel verdict demotes an item in the
