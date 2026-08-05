@@ -33,6 +33,8 @@ import type { RemediationDetail } from '../../core/models';
       <a class="back" [routerLink]="['/intel', d.item.id]">&larr; Back to item</a>
       <h1>{{ d.item.title }}</h1>
 
+      <div class="layout">
+      <div class="stack">
       <tf-panel title="What this does">
         <tf-reach-diagram [diagram]="diagram()" />
         @if (d.kevListed) {
@@ -132,11 +134,51 @@ import type { RemediationDetail } from '../../core/models';
           <a routerLink="/remediate">See them &rarr;</a>
         </tf-panel>
       }
+      </div>
+
+      <aside class="assist" [class.open]="assistOpen()">
+        <button type="button" class="assist-toggle" [attr.aria-expanded]="assistOpen()" (click)="assistOpen.set(!assistOpen())">
+          <span>AI Assist</span>
+        </button>
+        @if (assistOpen()) {
+          <div class="assist-body">
+            <h2>AI Assist</h2>
+            <p class="assist-status">Coming soon</p>
+            <p>A plain-language explanation of this vulnerability, generated on demand from the facts already on this page.</p>
+          </div>
+        }
+      </aside>
+      </div>
     }
   `,
   styles: [`
     .back { font-size: var(--fs-xs); color: var(--ink-2); text-decoration: none; }
     h1 { font-size: var(--fs-lg); margin: 8px 0 12px; }
+    .stack { display: grid; gap: 16px; }
+    .layout { display: flex; align-items: flex-start; gap: 16px; }
+    .layout > .stack { flex: 1; min-width: 0; }
+    .assist {
+      flex: 0 0 34px; display: flex; flex-direction: column; align-items: stretch;
+      background: var(--surface); border: var(--hair) solid var(--hairline); border-radius: var(--radius-card);
+      overflow: hidden; transition: flex-basis var(--dur) var(--ease-out);
+    }
+    .assist.open { flex-basis: 280px; }
+    .assist-toggle {
+      appearance: none; cursor: pointer; font: inherit; background: none; border: 0; color: var(--ink-2);
+      padding: 12px 0; display: flex; align-items: center; justify-content: center; flex: none;
+    }
+    .assist:not(.open) .assist-toggle span {
+      writing-mode: vertical-rl; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .02em;
+    }
+    .assist.open .assist-toggle { justify-content: flex-start; padding: 12px 16px 0; }
+    .assist-body { padding: 4px 16px 16px; }
+    .assist-body h2 { margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
+    .assist-status {
+      display: inline-block; margin: 0 0 8px; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2);
+      background: var(--surface-2); padding: 2px 8px; border-radius: 999px;
+    }
+    .assist-body p:not(.assist-status) { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }
+    @media (prefers-reduced-motion: reduce) { .assist { transition: none; } }
     .range { margin: 0 0 10px; font-size: var(--fs-sm); color: var(--ink-2); }
     .verdict { margin: 0 0 14px; animation: verdict-in 180ms var(--ease-out); }
     @keyframes verdict-in { from { opacity: 0; } to { opacity: 1; } }
@@ -223,6 +265,7 @@ export class RemediationGuidedComponent {
   versionInput = signal('');
   offerVersionBump = signal(false);
   recordedMessage = signal<string | null>(null);
+  assistOpen = signal(false);
 
   // Shared across submitVersion/declineVersion/confirmVersionBump — only one of the three write
   // actions can plausibly be in flight from this form at once. Without this, a slow PATCH read

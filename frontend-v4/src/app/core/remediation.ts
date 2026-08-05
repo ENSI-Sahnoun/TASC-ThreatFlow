@@ -162,13 +162,30 @@ const UI_ANNOTATION: Record<string, string> = {
 // panel never describe the same H metric two different ways.
 const OUTCOME_VERBS: Record<string, string> = { C: 'read', I: 'change', A: 'shut down' };
 
-// The formal CVSS impact category behind each verb — the detail line's job is to name these,
-// not to restate the verbs the title already gives.
-const CIA_LABELS: Record<string, string> = { C: 'Confidentiality', I: 'Integrity', A: 'Availability' };
-
 function joinVerbs(values: string[]): string {
   if (values.length === 1) return values[0];
   return `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// A plain-language headline tiered by how many of C/I/A are fully compromised (H) — not the raw
+// verbs, which read as a bare fragment with no framing. The verbs themselves (with L's "partly"
+// qualifier) move to the detail line below; the formal CVSS category names move to the "why"
+// hover, where every other node's raw metric letters already live.
+const OUTCOME_HEADLINE_SINGLE: Record<string, string> = {
+  C: 'Can see everything on it',
+  I: 'Can change anything on it',
+  A: 'Can shut it down',
+};
+
+function outcomeHeadline(hKeys: string[]): string {
+  if (hKeys.length === 3) return 'Full control of the system';
+  if (hKeys.length === 2) return 'Broad access to the system';
+  if (hKeys.length === 1) return OUTCOME_HEADLINE_SINGLE[hKeys[0]];
+  return 'Limited access to the system';
 }
 
 function originNode(av: string | undefined): DiagramNode {
@@ -192,20 +209,21 @@ function gateNode(pr: string | undefined): DiagramNode {
 // verb — dropped entirely, same as before.
 function outcomeNode(metrics: Record<string, string>): DiagramNode {
   const parts: string[] = [];
-  const cia: string[] = [];
+  const hKeys: string[] = [];
   const from: string[] = [];
   for (const key of ['C', 'I', 'A']) {
     const value = metrics[key];
-    if (value === 'H') { parts.push(OUTCOME_VERBS[key]); cia.push(`${CIA_LABELS[key]} (full)`); from.push(`${key}:H`); }
-    else if (value === 'L') { parts.push(`partly ${OUTCOME_VERBS[key]}`); cia.push(`${CIA_LABELS[key]} (partial)`); from.push(`${key}:L`); }
+    if (value === 'H') { parts.push(OUTCOME_VERBS[key]); hKeys.push(key); from.push(`${key}:H`); }
+    else if (value === 'L') { parts.push(`partly ${OUTCOME_VERBS[key]}`); from.push(`${key}:L`); }
   }
   if (!parts.length) {
     return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector states what it reads, changes or shuts down', from: 'C/I/A' };
   }
-  // The title is the plain-language verb list; the detail names the formal CVSS impact category
-  // behind each one (Confidentiality/Integrity/Availability, full or partial per H/L) — real,
-  // vector-derived information a technical reader can act on, not a restatement of the title.
-  return { id: 'outcome', title: joinVerbs(parts), detail: joinVerbs(cia), from: from.join('/') };
+  // The headline is a plain-language tier (how many of C/I/A are fully compromised), not the raw
+  // verbs — those move to the detail line instead, so the box never shows a bare CVSS-shaped
+  // fragment as its default text. The formal CIA category names are gone from default view
+  // entirely; the "why" hover's `from` field already gives a technical reader the exact metrics.
+  return { id: 'outcome', title: outcomeHeadline(hKeys), detail: `${capitalize(joinVerbs(parts))}.`, from: from.join('/') };
 }
 
 // AC:L means the exploit works whenever it's tried; AC:H means the attacker needs conditions to

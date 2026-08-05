@@ -215,38 +215,41 @@ describe('reachDiagram', () => {
     expect(reachDiagram({}).gateAnnotation).toBeNull();
   });
 
-  it('fills the outcome node with read/change/shut down only for H-valued C/I/A', () => {
+  it('all three H metrics headline as full control, detail as the verb sentence', () => {
     const d = reachDiagram({ C: 'H', I: 'H', A: 'H' });
-    expect(d.nodes[2].title).toBe('read, change and shut down');
+    expect(d.nodes[2].title).toBe('Full control of the system');
+    expect(d.nodes[2].detail).toBe('Read, change and shut down.');
     expect(d.nodes[2].from).toBe('C:H/I:H/A:H');
   });
-  it('outcome detail names the CIA-triad category behind each verb, not the verbs again', () => {
-    const d = reachDiagram({ C: 'H', I: 'H', A: 'H' });
-    expect(d.nodes[2].detail).toBe('Confidentiality (full), Integrity (full) and Availability (full)');
+  it('two H metrics headline as broad access', () => {
+    const d = reachDiagram({ C: 'H', A: 'H' });
+    expect(d.nodes[2].title).toBe('Broad access to the system');
+    expect(d.nodes[2].detail).toBe('Read and shut down.');
   });
-  it('outcome detail marks an L-valued metric partial', () => {
-    const d = reachDiagram({ C: 'H', I: 'L' });
-    expect(d.nodes[2].detail).toBe('Confidentiality (full) and Integrity (partial)');
+  it('a single H metric headlines as that specific capability', () => {
+    expect(reachDiagram({ C: 'H' }).nodes[2].title).toBe('Can see everything on it');
+    expect(reachDiagram({ I: 'H' }).nodes[2].title).toBe('Can change anything on it');
+    expect(reachDiagram({ A: 'H' }).nodes[2].title).toBe('Can shut it down');
   });
-  it('a single H metric produces a single verb', () => {
-    expect(reachDiagram({ C: 'H' }).nodes[2].title).toBe('read');
-  });
-  it('two H metrics join with "and", not a comma list', () => {
-    expect(reachDiagram({ C: 'H', A: 'H' }).nodes[2].title).toBe('read and shut down');
+  it('a single H metric detail is the capitalized single verb', () => {
+    expect(reachDiagram({ C: 'H' }).nodes[2].detail).toBe('Read.');
   });
   it('an L-valued metric now renders as "partly <verb>" — it no longer vanishes (Part 7)', () => {
     const d = reachDiagram({ C: 'L', I: 'L', A: 'L' });
-    expect(d.nodes[2].title).toBe('partly read, partly change and partly shut down');
+    expect(d.nodes[2].title).toBe('Limited access to the system');
+    expect(d.nodes[2].detail).toBe('Partly read, partly change and partly shut down.');
     expect(d.nodes[2].from).toBe('C:L/I:L/A:L');
   });
   it('mixes H and L verbs in one outcome — H plain, L "partly" (Part 7)', () => {
     const d = reachDiagram({ C: 'H', I: 'L' });
-    expect(d.nodes[2].title).toBe('read and partly change');
+    expect(d.nodes[2].title).toBe('Can see everything on it');
+    expect(d.nodes[2].detail).toBe('Read and partly change.');
     expect(d.nodes[2].from).toBe('C:H/I:L');
   });
   it('a metric at N is still an absent slot, not a struck-through verb (Part 7)', () => {
     const d = reachDiagram({ C: 'H', I: 'N', A: 'N' });
-    expect(d.nodes[2].title).toBe('read');
+    expect(d.nodes[2].title).toBe('Can see everything on it');
+    expect(d.nodes[2].detail).toBe('Read.');
     expect(d.nodes[2].from).toBe('C:H');
   });
   it('no metrics at all is a stated gap on the outcome node too', () => {
