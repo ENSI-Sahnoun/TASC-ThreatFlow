@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect, ElementRef, ViewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import type { HttpErrorResponse } from '@angular/common/http';
@@ -112,16 +112,19 @@ import type { RemediationDetail } from '../../core/models';
         <tf-playbook-panel [playbook]="d.playbook" [itemId]="d.item.id" (toggled)="onStepToggled($event)" />
       }
 
-      @if (offerVersionBump()) {
-        <tf-panel title="Close it out">
+      <dialog #bumpDialog class="bump-dialog" (cancel)="offerVersionBump.set(false)" (click)="onDialogClick($event, bumpDialog)">
+        <div class="bump-content">
+          <h2>Close it out</h2>
           <p>Applied the fix. Record that you're now on {{ bumpTarget() }}?</p>
-          <button type="button" class="primary" [disabled]="versionSaving()" (click)="confirmVersionBump()">
-            {{ versionSaving() ? 'Recording…' : 'Yes' }}
-          </button>
-          <button type="button" [disabled]="versionSaving()" (click)="offerVersionBump.set(false)">Not yet</button>
+          <div class="bump-actions">
+            <button type="button" class="primary" [disabled]="versionSaving()" (click)="confirmVersionBump()">
+              {{ versionSaving() ? 'Recording…' : 'Yes' }}
+            </button>
+            <button type="button" [disabled]="versionSaving()" (click)="offerVersionBump.set(false)">Not yet</button>
+          </div>
           @if (versionError(); as err) { <p class="version-error">{{ err }}</p> }
-        </tf-panel>
-      }
+        </div>
+      </dialog>
 
       @if (recordedMessage(); as msg) {
         <tf-panel title="Close it out">
@@ -176,6 +179,32 @@ import type { RemediationDetail } from '../../core/models';
       background: var(--sev-critical); padding: 3px 10px; border-radius: 999px;
     }
     .kev-badge.past-due { background: var(--sev-critical); outline: 2px solid var(--sev-critical); outline-offset: 1px; }
+
+    .bump-dialog {
+      border: 0; border-radius: var(--radius-card); padding: 0; background: var(--surface);
+      color: var(--ink); box-shadow: 0 24px 60px -20px rgba(0, 0, 20, .6);
+    }
+    .bump-dialog::backdrop { background: rgba(0, 0, 20, .55); backdrop-filter: blur(3px); }
+    .bump-content { padding: 20px; display: grid; gap: 12px; min-width: 280px; max-width: 380px; }
+    .bump-content h2 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+    .bump-content p { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }
+    .bump-actions { display: flex; gap: 8px; }
+    /* Materializes rather than just fading — a real surface arriving, not an opacity toggle. */
+    @starting-style {
+      .bump-dialog[open] { opacity: 0; transform: scale(.96) translateY(4px); }
+      .bump-dialog[open]::backdrop { opacity: 0; }
+    }
+    .bump-dialog[open] {
+      opacity: 1; transform: none;
+      transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out), overlay var(--dur) allow-discrete, display var(--dur) allow-discrete;
+    }
+    .bump-dialog[open]::backdrop {
+      opacity: 1; transition: opacity var(--dur) var(--ease-out);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .bump-dialog[open], .bump-dialog[open]::backdrop { transition: opacity var(--dur-fast) linear; }
+      @starting-style { .bump-dialog[open] { transform: none; } }
+    }
   `],
 })
 export class RemediationGuidedComponent {
@@ -183,6 +212,8 @@ export class RemediationGuidedComponent {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private profileService = inject(ProfileService);
+
+  @ViewChild('bumpDialog') private bumpDialogRef?: ElementRef<HTMLDialogElement>;
 
   id = NaN;
   detail = signal<RemediationDetail | null>(null);
@@ -233,6 +264,18 @@ export class RemediationGuidedComponent {
   });
 
   constructor() {
+    // Native <dialog> owns its own top layer, backdrop and focus trap — showModal()/close() are
+    // the only correct way to drive it; toggling an [open] attribute skips the backdrop and lets
+    // focus escape. The dialog element is always in the DOM (never behind @if) so this ref
+    // resolves before the first offerVersionBump write.
+    effect(() => {
+      const open = this.offerVersionBump();
+      const dialog = this.bumpDialogRef?.nativeElement;
+      if (!dialog) return;
+      if (open && !dialog.open) dialog.showModal();
+      if (!open && dialog.open) dialog.close();
+    });
+
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((pm) => {
       const id = Number(pm.get('itemId'));
       if (!Number.isInteger(id) || id <= 0) {
@@ -315,6 +358,13 @@ export class RemediationGuidedComponent {
     });
   }
 
+  // A click that lands on the <dialog> element itself (not inside .bump-content) is a click on
+  // the ::backdrop — dialog has no native backdrop-click event, so this is the standard way to
+  // detect it.
+  onDialogClick(ev: MouseEvent, dialog: HTMLDialogElement): void {
+    if (ev.target === dialog) this.offerVersionBump.set(false);
+  }
+
   onStepToggled(e: { key: string; done: boolean }): void {
     const fix = this.detail()?.remediation?.fix;
     if (e.key === 'patch' && e.done && fix && fix.kind === 'version') {
@@ -351,7 +401,7 @@ export class RemediationGuidedComponent {
                 const cleared = countCleared(beforeItems, afterItems, currentItemId);
                 this.offerVersionBump.set(false);
                 this.recordedMessage.set(versionRecordedMessage(cleared) ?? 'Recorded.');
-                this.loadDetail();
+                this.autoTickAppliedSteps(currentItemId);
               },
               error: () => this.versionBumpFailed(),
             });
@@ -366,5 +416,26 @@ export class RemediationGuidedComponent {
   private versionBumpFailed(): void {
     this.versionSaving.set(false);
     this.versionError.set("Couldn't record that — try again.");
+  }
+
+  // Recording the version bump already IS "check whether you run the affected version" (key
+  // 'confirm') and, when the fix was a named version, IS "apply the vendor's fix" (key 'patch')
+  // — ticking both automatically means the reader doesn't re-do by hand what they just told the
+  // app. Only ticks steps this item's own playbook actually has and that aren't already done;
+  // loadDetail() (which itself resets versionSaving) runs last so the reload picks up every tick.
+  private autoTickAppliedSteps(itemId: number): void {
+    const steps = this.detail()?.playbook?.steps ?? [];
+    const done = new Set(this.detail()?.playbook?.done ?? []);
+    const toTick = steps.map((s) => s.key).filter((key) => (key === 'confirm' || key === 'patch') && !done.has(key));
+
+    if (toTick.length === 0) {
+      this.loadDetail();
+      return;
+    }
+    let remaining = toTick.length;
+    const settle = () => { remaining -= 1; if (remaining === 0) this.loadDetail(); };
+    for (const key of toTick) {
+      this.api.tickPlaybookStep(itemId, key).subscribe({ next: settle, error: settle });
+    }
   }
 }

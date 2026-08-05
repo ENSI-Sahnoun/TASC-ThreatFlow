@@ -1,5 +1,4 @@
 import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { PanelComponent } from './panel.component';
 import { ApiService } from '../core/api.service';
 import { playbookProgress, stepBlocks, groundingFooter } from '../core/playbook';
@@ -16,11 +15,10 @@ import type { Playbook } from '../core/models';
   selector: 'tf-playbook-panel',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelComponent, RouterLink],
+  imports: [PanelComponent],
   template: `
     @if (playbook) {
       <tf-panel title="What to do about this" [subtitle]="subtitle()">
-        <a class="guided-link" [routerLink]="['/remediate', itemId]">Open the guided walkthrough &rarr;</a>
         <ol class="steps">
           @for (s of blocks(); track s.key) {
             <li [class.done]="s.done">
@@ -53,12 +51,6 @@ import type { Playbook } from '../core/models';
     }
   `,
   styles: [`
-    .guided-link {
-      display: inline-block; margin-bottom: 10px; font-size: var(--fs-xs); color: var(--accent);
-      text-decoration: none;
-    }
-    .guided-link:hover { text-decoration: underline; }
-    .guided-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
     .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
     .steps > li + li { padding-top: 16px; border-top: var(--hair) solid var(--hairline); }
     .steps > li.done { opacity: 0.7; }
