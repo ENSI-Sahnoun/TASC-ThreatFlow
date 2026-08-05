@@ -304,3 +304,84 @@ export function versionRecordedMessage(clearedCount: number): string | null {
   const pronoun = clearedCount === 1 ? 'its' : 'their';
   return `Recorded. ${clearedCount} other ${plural} against this machine ${verb} no longer inside ${pronoun} affected range.`;
 }
+
+// ---- Part 1: threats collapse into fix-based action rows ----
+
+export type SeverityBand = 'critical' | 'high' | 'medium' | 'low' | 'none' | 'unknown';
+
+export interface RemediationAction {
+  key: string;
+  fix: RemediationFix;
+  items: RemediationQueueItem[];
+  count: number;
+  worstScore: number | null;
+  worstSeverity: string | null;
+  // The worst-scoring item's OWN cvssVersion — for the numeral only, not for picking the
+  // severity colour (that already comes from `worstSeverity`, itself server-derived). See the
+  // triage redesign plan's Spec Accuracy Finding 1: cve_intel carries no version, so this is the
+  // best available pairing, not a guaranteed-consistent one.
+  worstVersion: string | null;
+  severityCounts: Record<SeverityBand, number>;
+  kev: { count: number; ransomware: boolean; pastDueCount: number } | null;
+}
+
+// Grouping key is the fix itself (Part 1): kind:'version' groups on fix.value (a distinct
+// upgrade target is a distinct action), but patch/advisory/none each collapse to ONE group per
+// asset regardless of the specific URL — two patch links are not two decisions, they're one
+// ("go read the vendor's links"), and splitting patch/advisory by URL would reproduce the wall
+// this whole redesign exists to remove.
+function actionKey(fix: RemediationFix): string {
+  return fix.kind === 'version' ? `version:${fix.value}` : fix.kind;
+}
+
+const EMPTY_SEVERITY_COUNTS: Record<SeverityBand, number> = {
+  critical: 0, high: 0, medium: 0, low: 0, none: 0, unknown: 0,
+};
+
+function isSeverityBand(value: string | null): value is SeverityBand {
+  return value != null && value in EMPTY_SEVERITY_COUNTS;
+}
+
+export function groupActions(items: RemediationQueueItem[], now: Date = new Date()): RemediationAction[] {
+  const byKey = new Map<string, RemediationQueueItem[]>();
+  for (const item of items) {
+    const key = actionKey(item.fix);
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(item); else byKey.set(key, [item]);
+  }
+
+  const actions: RemediationAction[] = [];
+  for (const [key, bucketItems] of byKey) {
+    const severityCounts = { ...EMPTY_SEVERITY_COUNTS };
+    let worst: RemediationQueueItem | null = null;
+    let kevCount = 0;
+    let kevRansomware = false;
+    let kevPastDue = 0;
+
+    for (const item of bucketItems) {
+      const band = isSeverityBand(item.severity) ? item.severity : 'unknown';
+      severityCounts[band] += 1;
+
+      if (worst === null || (item.cvssScore ?? -1) > (worst.cvssScore ?? -1)) worst = item;
+
+      if (item.kevListed) {
+        kevCount += 1;
+        if (item.kevRansomware) kevRansomware = true;
+        if (isPastDue(item.kevDueDate, now)) kevPastDue += 1;
+      }
+    }
+
+    actions.push({
+      key,
+      fix: bucketItems[0].fix,
+      items: bucketItems,
+      count: bucketItems.length,
+      worstScore: worst?.cvssScore ?? null,
+      worstSeverity: worst?.severity ?? null,
+      worstVersion: worst?.cvssVersion ?? null,
+      severityCounts,
+      kev: kevCount > 0 ? { count: kevCount, ransomware: kevRansomware, pastDueCount: kevPastDue } : null,
+    });
+  }
+  return actions;
+}

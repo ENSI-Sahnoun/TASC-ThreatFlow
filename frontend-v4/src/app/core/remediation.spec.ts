@@ -10,6 +10,8 @@ const item = (over: Partial<RemediationQueueItem> = {}): RemediationQueueItem =>
   itemId: 1, title: 'T', tier: 'act_now', score: 1,
   status: 'affected', installed: null, versionState: 'unset', entry: null,
   fix: { kind: 'none' }, mitigations: [], dueDate: null, patchUrl: null,
+  cveId: null, cvssScore: null, cvssVersion: null, severity: null,
+  kevListed: false, kevDueDate: null, kevRansomware: false, sourceCount: 0,
   ...over,
 });
 
@@ -338,5 +340,85 @@ describe('versionRecordedMessage', () => {
   });
   it('plural wording for more than one', () => {
     expect(versionRecordedMessage(2)).toBe('Recorded. 2 other threats against this machine are no longer inside their affected range.');
+  });
+});
+
+import { groupActions } from './remediation';
+
+describe('groupActions', () => {
+  it('collapses version-kind items sharing the same fix.value into one action', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 2, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 3, fix: { kind: 'version', value: '26.6' } }),
+    ];
+    const actions = groupActions(items);
+    expect(actions.length).toBe(2);
+    expect(actions.find((a) => a.fix.kind === 'version' && a.fix.value === '14.8.8')!.count).toBe(2);
+  });
+  it('collapses every patch-kind item into a single action regardless of differing URLs', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'patch', value: 'https://x/a' } }),
+      item({ itemId: 2, fix: { kind: 'patch', value: 'https://x/b' } }),
+    ];
+    expect(groupActions(items).length).toBe(1);
+  });
+  it('collapses every advisory-kind item into a single action', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'advisory', value: 'https://x/a' } }),
+      item({ itemId: 2, fix: { kind: 'advisory', value: 'https://x/b' } }),
+    ];
+    expect(groupActions(items).length).toBe(1);
+  });
+  it('collapses every none-kind item into a single action', () => {
+    const items = [item({ itemId: 1, fix: { kind: 'none' } }), item({ itemId: 2, fix: { kind: 'none' } })];
+    expect(groupActions(items).length).toBe(1);
+  });
+  it('never counts one threat in two actions', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 2, fix: { kind: 'patch', value: 'https://x/a' } }),
+      item({ itemId: 3, fix: { kind: 'none' } }),
+    ];
+    const actions = groupActions(items);
+    const total = actions.reduce((n, a) => n + a.count, 0);
+    expect(total).toBe(items.length);
+  });
+  it('computes the worst CVSS score and its severity within the bundle', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' }, cvssScore: 9.8, severity: 'critical' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '14.8.8' }, cvssScore: 7.5, severity: 'high' }),
+    ];
+    const a = groupActions(items)[0];
+    expect(a.worstScore).toBe(9.8);
+    expect(a.worstSeverity).toBe('critical');
+  });
+  it('carries the worst item\'s own cvssVersion alongside the worst score', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'none' }, cvssScore: 9.8, cvssVersion: '3.1' }),
+      item({ itemId: 2, fix: { kind: 'none' }, cvssScore: 7.5, cvssVersion: '2.0' }),
+    ];
+    expect(groupActions(items)[0].worstVersion).toBe('3.1');
+  });
+  it('tallies the severity distribution across the bundle, unrated items counting as unknown', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' }, severity: 'critical' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '14.8.8' }, severity: 'critical' }),
+      item({ itemId: 3, fix: { kind: 'version', value: '14.8.8' }, severity: 'high' }),
+      item({ itemId: 4, fix: { kind: 'version', value: '14.8.8' }, severity: null }),
+    ];
+    expect(groupActions(items)[0].severityCounts).toEqual({ critical: 2, high: 1, medium: 0, low: 0, none: 0, unknown: 1 });
+  });
+  it('reports kev: null when nothing in the bundle is KEV-listed', () => {
+    expect(groupActions([item({ itemId: 1, fix: { kind: 'none' }, kevListed: false })])[0].kev).toBeNull();
+  });
+  it('aggregates KEV count, ransomware flag and past-due count across the bundle', () => {
+    const now = new Date('2026-08-04T00:00:00Z');
+    const items = [
+      item({ itemId: 1, fix: { kind: 'none' }, kevListed: true, kevRansomware: true, kevDueDate: '2024-12-03' }),
+      item({ itemId: 2, fix: { kind: 'none' }, kevListed: true, kevRansomware: false, kevDueDate: '2027-01-01' }),
+      item({ itemId: 3, fix: { kind: 'none' }, kevListed: false }),
+    ];
+    expect(groupActions(items, now)[0].kev).toEqual({ count: 2, ransomware: true, pastDueCount: 1 });
   });
 });
