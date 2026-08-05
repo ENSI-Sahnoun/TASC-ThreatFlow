@@ -87,6 +87,7 @@ interface EntityLink { key: string; label: string; path: string[]; }
         [remediation]="remediation()?.remediation ?? null"
         [group]="remediationGroup()"
         [itemId]="d.id"
+        [severity]="remediation()?.severity ?? null"
       />
 
       <tf-panel title="Entities">
