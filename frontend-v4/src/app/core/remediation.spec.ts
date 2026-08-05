@@ -741,3 +741,29 @@ describe('buildTicketText', () => {
     expect(buildTicketText(a, asset)).not.toMatch(/[<>{}]/);
   });
 });
+
+import { matchingGroup, actionCountFor } from './remediation';
+
+describe('matchingGroup', () => {
+  it('finds the group whose vendor/product match the asset', () => {
+    const groups = [group({ vendor: 'apple', product: 'macos' }), group({ vendor: 'fortinet', product: 'fortios' })];
+    expect(matchingGroup(groups, { vendor: 'fortinet', product: 'fortios' })).toBe(groups[1]);
+  });
+  it('is null when nothing matches', () => {
+    expect(matchingGroup([], { vendor: 'apple', product: 'macos' })).toBeNull();
+  });
+});
+
+describe('actionCountFor', () => {
+  it('counts every item sharing the same fix as the given item', () => {
+    const g = group({ items: [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 2, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 3, fix: { kind: 'none' } }),
+    ] });
+    expect(actionCountFor(g, 1)).toBe(2);
+  });
+  it('is 1 when the item matches nothing in the group (defensive default)', () => {
+    expect(actionCountFor(group({ items: [] }), 999)).toBe(1);
+  });
+});

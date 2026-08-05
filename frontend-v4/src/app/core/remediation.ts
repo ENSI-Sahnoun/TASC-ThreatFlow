@@ -625,3 +625,23 @@ export function buildTicketText(action: RemediationAction, asset: { vendor: stri
 
   return lines.join('\n');
 }
+
+// ---- Part 9 prep: the intel detail page's remediation widget ----
+
+// The queue's own per-asset grouping (Spec A's SQL groups by vendor/product) — this just finds
+// the one group matching a given asset, so the widget can show the SAME progress fraction the
+// queue page shows for this asset, not a second calculation of it.
+export function matchingGroup(
+  groups: RemediationQueueGroup[],
+  asset: { vendor: string; product: string },
+): RemediationQueueGroup | null {
+  return groups.find((g) => g.vendor === asset.vendor && g.product === asset.product) ?? null;
+}
+
+// How many threats against this asset share the SAME fix as the one item the widget is showing
+// — reuses groupActions (Part 1) rather than a second grouping rule, so "3 threats" on the
+// widget always agrees with the count on the matching queue row.
+export function actionCountFor(group: RemediationQueueGroup, itemId: number): number {
+  const bucket = groupActions(group.items).find((a) => a.items.some((i) => i.itemId === itemId));
+  return bucket?.count ?? 1;
+}
