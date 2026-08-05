@@ -8,6 +8,7 @@
 const { scoreRelevance } = require('./relevance_score');
 const { buildConsequence } = require('./consequence');
 const { buildPlaybook } = require('./playbook');
+const { buildCategoryPlaybook } = require('./playbooks');
 const { getProfile } = require('./profiles');
 
 // 7 params per row; Postgres caps a statement at 65535 bind parameters, so 1000 rows (7000
@@ -20,8 +21,12 @@ const INSERT_BATCH = 1000;
 async function assembleItems(store) {
   const rows = await store.all(`
     SELECT i.id, i.severity, i.cvss_score, i.cvss_version, i.cvss_vector, i.published_at, i.industry,
+           i.category, i.title,
            COALESCE(d.domains, '{}') AS domains,
            COALESCE(c.cpes, '[]'::jsonb) AS cpes,
+           COALESCE(io.iocs, '[]'::jsonb) AS iocs,
+           COALESCE(ac.actors, '{}') AS actors,
+           COALESCE(fa.families, '{}') AS families,
            ci.kev_listed, ci.epss_score, ci.severity AS cve_severity, ci.cvss_score AS cve_cvss,
            ci.kev_ransomware, ci.patch_url, ci.advisory_url, ci.affected_versions,
            -- As text, never as a Date: pg parses DATE at local midnight, so serializing it
@@ -35,6 +40,16 @@ async function assembleItems(store) {
         SELECT jsonb_agg(jsonb_build_object('vendor', vendor, 'product', product)) AS cpes
           FROM item_cpes WHERE item_id = i.id
       ) c ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('type', ioc_type, 'value', ioc_value)) AS iocs
+          FROM item_iocs WHERE item_id = i.id
+      ) io ON true
+      LEFT JOIN LATERAL (
+        SELECT array_agg(actor) AS actors FROM item_actors WHERE item_id = i.id
+      ) ac ON true
+      LEFT JOIN LATERAL (
+        SELECT array_agg(family) AS families FROM item_malware_families WHERE item_id = i.id
+      ) fa ON true
       LEFT JOIN LATERAL (
         -- An item can carry several CVE ids; the most severe consolidated record is the one
         -- that should drive the verdict.
@@ -54,8 +69,13 @@ async function assembleItems(store) {
     cvssVector: r.cvss_vector,
     publishedAt: r.published_at,
     industry: r.industry,
+    category: r.category,
+    title: r.title,
     domains: r.domains || [],
     cpes: r.cpes || [],
+    iocs: r.iocs || [],
+    actors: r.actors || [],
+    families: r.families || [],
     cve: r.kev_listed == null && r.cve_severity == null && r.cve_cvss == null
       ? null
       : {
@@ -106,23 +126,39 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
     values.push([profile.id, item.id, profile.profile_version, tier, score,
       JSON.stringify(matches), JSON.stringify({ ...consequence, exposure })]);
 
-    // Playbooks only for the tiers a user will actually read, and only for an item that is
-    // actually about a CVE — a domain/sector-only watch item has nothing to build a checklist
-    // from. Cheap and pure, so it is materialized in the same pass as consequence.
-    if ((tier === 'act_now' || tier === 'watch') && (item.cve || item.cvssVector)) {
-      const playbookSteps = buildPlaybook({
-        vector: item.cvssVector,
-        exposure,
-        vendor: asset ? asset.vendor : null,
-        product: asset ? asset.product : null,
-        kevListed: !!(item.cve && item.cve.kevListed),
-        kevDueDate: item.cve ? item.cve.kevDueDate : null,
-        kevRansomware: !!(item.cve && item.cve.knownRansomware),
-        patchUrl: item.cve ? item.cve.patchUrl : null,
-        advisoryUrl: item.cve ? item.cve.advisoryUrl : null,
-        affectedVersions: item.cve ? item.cve.affectedVersions : [],
-      });
-      playbookValues.push([profile.id, item.id, profile.profile_version, JSON.stringify(playbookSteps)]);
+    // Playbooks only for the tiers a user will actually read. A CVE-shaped item (has a CVE
+    // record or its own CVSS vector) keeps the existing per-CVE builder; everything else falls
+    // through to the category dispatcher, which returns null for a category with nothing to
+    // ground a step on (advisory/osint/news/other) or for an ioc-category item with zero
+    // indicators. Cheap and pure, so it is materialized in the same pass as consequence.
+    if (tier === 'act_now' || tier === 'watch') {
+      let playbookSteps = null;
+      if (item.cve || item.cvssVector) {
+        playbookSteps = buildPlaybook({
+          vector: item.cvssVector,
+          exposure,
+          vendor: asset ? asset.vendor : null,
+          product: asset ? asset.product : null,
+          kevListed: !!(item.cve && item.cve.kevListed),
+          kevDueDate: item.cve ? item.cve.kevDueDate : null,
+          kevRansomware: !!(item.cve && item.cve.knownRansomware),
+          patchUrl: item.cve ? item.cve.patchUrl : null,
+          advisoryUrl: item.cve ? item.cve.advisoryUrl : null,
+          affectedVersions: item.cve ? item.cve.affectedVersions : [],
+        });
+      } else {
+        playbookSteps = buildCategoryPlaybook({
+          category: item.category,
+          title: item.title,
+          actors: item.actors,
+          families: item.families,
+          iocs: item.iocs,
+        });
+      }
+
+      if (playbookSteps && playbookSteps.length > 0) {
+        playbookValues.push([profile.id, item.id, profile.profile_version, JSON.stringify(playbookSteps)]);
+      }
     }
   }
 

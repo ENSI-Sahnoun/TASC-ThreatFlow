@@ -64,6 +64,77 @@ test('assembleItems gives a non-CVE item a null cve and empty arrays', async () 
   } finally { await cleanup(); }
 });
 
+test('assembleItems joins category, title, iocs, actors and families onto each item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S2','json_api',true) RETURNING id");
+    const item = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, published_at)
+       VALUES ($1,'ransomware','Acme Corp (LockBit)','R-1', now() - interval '1 days') RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_iocs (item_id, ioc_type, ioc_value) VALUES ($1,'ip','203.0.113.5')", [item.id]);
+    await store.run("INSERT INTO item_actors (item_id, actor) VALUES ($1,'LockBit')", [item.id]);
+    await store.run("INSERT INTO item_malware_families (item_id, family) VALUES ($1,'LockBit')", [item.id]);
+
+    const rows = await assembleItems(store);
+    const row = rows.find((r) => r.id === item.id);
+    assert.strictEqual(row.category, 'ransomware');
+    assert.strictEqual(row.title, 'Acme Corp (LockBit)');
+    assert.deepStrictEqual(row.iocs, [{ type: 'ip', value: '203.0.113.5' }]);
+    assert.deepStrictEqual(row.actors, ['LockBit']);
+    assert.deepStrictEqual(row.families, ['LockBit']);
+  } finally { await cleanup(); }
+});
+
+test('recomputeProfile materializes a category playbook for a watch-tier item with no CVE', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S3','json_api',true) RETURNING id");
+    const item = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+       VALUES ($1,'ransomware','Acme Corp (LockBit)','R-2','medium', now() - interval '1 days') RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_domains (item_id, domain) VALUES ($1,'ransomware')", [item.id]);
+    await store.run("INSERT INTO item_actors (item_id, actor) VALUES ($1,'LockBit')", [item.id]);
+
+    const profile = await createProfile(store, {
+      name: 'RansomProfile', sector: 'finance', vendors: [], products: [],
+      threatDomains: ['ransomware'], severityFloor: 'medium', assets: [],
+    });
+    await recomputeProfile(store, profile.id);
+
+    const pb = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+      [item.id, profile.id, profile.profile_version]);
+    assert.ok(pb);
+    assert.ok(pb.steps.some((s) => s.key === 'ransomware:confirm'));
+    assert.ok(pb.steps.some((s) => s.key === 'ransomware:attack-mitigation'));
+  } finally { await cleanup(); }
+});
+
+test('recomputeProfile writes no playbook row for an ioc-category watch item with zero indicators', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S4','json_api',true) RETURNING id");
+    const item = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+       VALUES ($1,'ioc','Raw indicator feed item','I-1','medium', now() - interval '1 days') RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_domains (item_id, domain) VALUES ($1,'malware')", [item.id]);
+
+    const profile = await createProfile(store, {
+      name: 'IocProfile', sector: 'finance', vendors: [], products: [],
+      threatDomains: ['malware'], severityFloor: 'medium', assets: [],
+    });
+    await recomputeProfile(store, profile.id);
+
+    const pb = await store.get(
+      'SELECT steps FROM item_playbooks WHERE item_id = $1 AND profile_id = $2 AND profile_version = $3',
+      [item.id, profile.id, profile.profile_version]);
+    assert.strictEqual(pb, undefined);
+  } finally { await cleanup(); }
+});
+
 test('recomputeProfile writes one row per item at the current profile_version', async () => {
   const { store, cleanup } = await makeTempDb();
   try {
