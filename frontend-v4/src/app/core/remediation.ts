@@ -115,7 +115,7 @@ export function parseVectorMetrics(vector: string | null | undefined): Record<st
 }
 
 export interface DiagramNode {
-  id: 'origin' | 'gate' | 'outcome';
+  id: 'origin' | 'gate' | 'outcome' | 'scope';
   title: string;
   detail: string;
   from: string;
@@ -127,9 +127,14 @@ export interface DiagramAnnotation {
 }
 
 export interface ReachDiagram {
-  nodes: [DiagramNode, DiagramNode, DiagramNode];
+  // 3 nodes, or 4 when S:C adds the scope node (Part 7).
+  nodes: DiagramNode[];
   edges: { from: string; to: string }[];
   gateAnnotation: DiagramAnnotation | null;
+  // AC belongs on the edge between the gate and the outcome (Part 7) — a separate field from
+  // gateAnnotation (which is UI-driven) rather than a second meaning for the same one, so a
+  // caller can render "why" text for each edge independently.
+  acAnnotation: DiagramAnnotation | null;
 }
 
 // Exact wording from the spec's own prose ("N internet, A adjacent network, L already on the
@@ -176,20 +181,50 @@ function gateNode(pr: string | undefined): DiagramNode {
     : { id: 'gate', title: 'Privilege not stated', detail: 'The vector does not state what access is required first', from: `PR:${pr ?? 'none'}` };
 }
 
-// Only H-valued C/I/A metrics reach this node — an :L metric is a real but partial effect, and
-// rendering it here would overstate what the diagram is claiming (consequence.js's buildImpact()
-// does render :L, as "partly read" etc.; this diagram deliberately does not, per the spec's own
-// rule that C/I/A "at H" fill the outcome node).
+// Renders every non-N C/I/A metric at its real level (Part 7) — H as the plain verb, L as
+// "partly" plus the verb, the same distinction consequence.js's buildImpact() already draws for
+// the impact panel, reused here (not duplicated wording) so the two surfaces never describe the
+// same H or L metric two different ways. A metric at N is an absent slot, not a struck-through
+// verb — dropped entirely, same as before.
 function outcomeNode(metrics: Record<string, string>): DiagramNode {
-  const verbs: string[] = [];
+  const parts: string[] = [];
   const from: string[] = [];
   for (const key of ['C', 'I', 'A']) {
-    if (metrics[key] === 'H') { verbs.push(OUTCOME_VERBS[key]); from.push(`${key}:H`); }
+    const value = metrics[key];
+    if (value === 'H') { parts.push(OUTCOME_VERBS[key]); from.push(`${key}:H`); }
+    else if (value === 'L') { parts.push(`partly ${OUTCOME_VERBS[key]}`); from.push(`${key}:L`); }
   }
-  if (!verbs.length) {
-    return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector reaches complete read, change or shutdown', from: 'C/I/A' };
+  if (!parts.length) {
+    return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector states what it reads, changes or shuts down', from: 'C/I/A' };
   }
-  return { id: 'outcome', title: joinVerbs(verbs), detail: joinVerbs(verbs), from: from.join('/') };
+  return { id: 'outcome', title: joinVerbs(parts), detail: joinVerbs(parts), from: from.join('/') };
+}
+
+// AC:L means the exploit works whenever it's tried; AC:H means the attacker needs conditions to
+// line up first — the difference between a reliable exploit and an opportunistic one (Part 7).
+// Never rendered anywhere in the product before this.
+const AC_ANNOTATION: Record<string, string> = {
+  L: 'works whenever it is tried',
+  H: 'needs conditions to line up',
+};
+
+function acAnnotationFor(ac: string | undefined): DiagramAnnotation | null {
+  const text = ac ? AC_ANNOTATION[ac] : undefined;
+  return text ? { text, from: `AC:${ac}` } : null;
+}
+
+// S:C means the flaw escapes the component it lives in and can affect the rest of the system —
+// consequence.js:buildImpact concedes a scope-changed vector "can carry effects these three
+// metrics do not express" and stops there; this is where that gets a fourth node instead of
+// staying unsaid (Part 7). Never rendered anywhere in the product before this.
+function scopeNode(s: string | undefined): DiagramNode | null {
+  if (s !== 'C') return null;
+  return {
+    id: 'scope',
+    title: 'Reaches beyond this component',
+    detail: 'A scope change means the flaw can affect more than the part of the system it lives in',
+    from: `S:${s}`,
+  };
 }
 
 // Renders the CVSS vector as a path: origin -> reach -> what it gets. Draws only what the vector
@@ -200,12 +235,19 @@ export function reachDiagram(metrics: Record<string, string> | null | undefined)
   const origin = originNode(m['AV']);
   const gate = gateNode(m['PR']);
   const outcome = outcomeNode(m);
+  const scope = scopeNode(m['S']);
   const ui = m['UI'];
   const uiText = ui ? UI_ANNOTATION[ui] : undefined;
+
+  const nodes: DiagramNode[] = scope ? [origin, gate, outcome, scope] : [origin, gate, outcome];
+  const edges = [{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }];
+  if (scope) edges.push({ from: 'outcome', to: 'scope' });
+
   return {
-    nodes: [origin, gate, outcome],
-    edges: [{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }],
+    nodes,
+    edges,
     gateAnnotation: uiText ? { text: uiText, from: `UI:${ui}` } : null,
+    acAnnotation: acAnnotationFor(m['AC']),
   };
 }
 

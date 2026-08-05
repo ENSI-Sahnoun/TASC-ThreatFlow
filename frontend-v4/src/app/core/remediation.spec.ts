@@ -226,9 +226,20 @@ describe('reachDiagram', () => {
   it('two H metrics join with "and", not a comma list', () => {
     expect(reachDiagram({ C: 'H', A: 'H' }).nodes[2].title).toBe('read and shut down');
   });
-  it('an L-valued metric never reaches the outcome node — only H does', () => {
+  it('an L-valued metric now renders as "partly <verb>" — it no longer vanishes (Part 7)', () => {
     const d = reachDiagram({ C: 'L', I: 'L', A: 'L' });
-    expect(d.nodes[2].title).toBe('No full-control outcome');
+    expect(d.nodes[2].title).toBe('partly read, partly change and partly shut down');
+    expect(d.nodes[2].from).toBe('C:L/I:L/A:L');
+  });
+  it('mixes H and L verbs in one outcome — H plain, L "partly" (Part 7)', () => {
+    const d = reachDiagram({ C: 'H', I: 'L' });
+    expect(d.nodes[2].title).toBe('read and partly change');
+    expect(d.nodes[2].from).toBe('C:H/I:L');
+  });
+  it('a metric at N is still an absent slot, not a struck-through verb (Part 7)', () => {
+    const d = reachDiagram({ C: 'H', I: 'N', A: 'N' });
+    expect(d.nodes[2].title).toBe('read');
+    expect(d.nodes[2].from).toBe('C:H');
   });
   it('no metrics at all is a stated gap on the outcome node too', () => {
     expect(reachDiagram({}).nodes[2].title).toBe('No full-control outcome');
@@ -238,7 +249,7 @@ describe('reachDiagram', () => {
     expect(reachDiagram(null)).toEqual(reachDiagram({}));
   });
 
-  it('always returns exactly two edges, origin->gate and gate->outcome', () => {
+  it('returns exactly two edges when there is no scope change', () => {
     const d = reachDiagram({ AV: 'N', PR: 'N' });
     expect(d.edges).toEqual([{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }]);
   });
@@ -578,5 +589,41 @@ describe('filterQueueItems', () => {
   });
   it('returns nothing when the query matches nothing', () => {
     expect(filterQueueItems([item({ itemId: 1, cveId: 'CVE-2024-1' })], 'zzz')).toEqual([]);
+  });
+});
+
+describe('reachDiagram — AC annotation (Part 7)', () => {
+  it('AC:L describes a reliable exploit', () => {
+    expect(reachDiagram({ AC: 'L' }).acAnnotation).toEqual({ text: 'works whenever it is tried', from: 'AC:L' });
+  });
+  it('AC:H describes an opportunistic one', () => {
+    expect(reachDiagram({ AC: 'H' }).acAnnotation).toEqual({ text: 'needs conditions to line up', from: 'AC:H' });
+  });
+  it('an absent AC produces no annotation at all, not a fabricated one', () => {
+    expect(reachDiagram({}).acAnnotation).toBeNull();
+  });
+});
+
+describe('reachDiagram — S:C scope change (Part 7)', () => {
+  it('S:C adds a fourth node', () => {
+    const d = reachDiagram({ S: 'C' });
+    expect(d.nodes.length).toBe(4);
+    expect(d.nodes[3].id).toBe('scope');
+    expect(d.nodes[3].from).toBe('S:C');
+    expect(d.nodes[3].title).toBe('Reaches beyond this component');
+  });
+  it('S:U produces only the original three nodes', () => {
+    expect(reachDiagram({ S: 'U' }).nodes.length).toBe(3);
+  });
+  it('an absent S produces only the original three nodes', () => {
+    expect(reachDiagram({}).nodes.length).toBe(3);
+  });
+  it('adds a third edge, outcome->scope, only when the scope node is present', () => {
+    const withScope = reachDiagram({ S: 'C' });
+    expect(withScope.edges).toEqual([
+      { from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }, { from: 'outcome', to: 'scope' },
+    ]);
+    const withoutScope = reachDiagram({ S: 'U' });
+    expect(withoutScope.edges).toEqual([{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }]);
   });
 });
