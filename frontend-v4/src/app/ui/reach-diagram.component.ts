@@ -1,6 +1,6 @@
 import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import type { ReachDiagram } from '../core/remediation';
-import { diagramSvgWidth, diagramEdgeLines } from '../core/remediation';
+import { diagramSvgWidth, diagramEdgeLines, DIAGRAM_SLOT_WIDTH } from '../core/remediation';
 
 // Step 1's signature diagram: origin -> gate -> outcome, and (when the vector's scope changed)
 // -> scope, drawn from whatever reachDiagram() (core/remediation.ts) already decided from the
@@ -31,7 +31,7 @@ import { diagramSvgWidth, diagramEdgeLines } from '../core/remediation';
         }
 
         @for (n of diagram.nodes; track n.id; let i = $index) {
-          <g class="node" [style.animation-delay.ms]="i * 80" [attr.transform]="'translate(' + (i * 240) + ', 0)'">
+          <g class="node" [style.animation-delay.ms]="i * 80" [attr.transform]="'translate(' + (i * slotWidth) + ', 0)'">
             <rect x="0" y="10" width="180" height="90" rx="10" class="box" />
             <text x="90" y="35" class="label">{{ n.title }}</text>
             <foreignObject x="10" y="45" width="160" height="45">
@@ -50,10 +50,12 @@ import { diagramSvgWidth, diagramEdgeLines } from '../core/remediation';
 
       <div class="why-row">
         @for (n of diagram.nodes; track n.id) {
-          <button type="button" class="why" [attr.aria-expanded]="isOpen(n.id)" (click)="toggle(n.id)">
-            why: {{ n.title }}
-          </button>
-          @if (isOpen(n.id)) { <p class="prov">{{ n.from }}</p> }
+          <div class="why-item" [class.open]="isOpen(n.id)">
+            <button type="button" class="why" [attr.aria-expanded]="isOpen(n.id)" (click)="toggle(n.id)">
+              why: {{ n.title }}
+            </button>
+            <p class="prov">{{ n.from }}</p>
+          </div>
         }
       </div>
     </div>
@@ -91,18 +93,32 @@ import { diagramSvgWidth, diagramEdgeLines } from '../core/remediation';
       .node, .edge { animation: none; opacity: 1; stroke-dashoffset: 0; }
     }
 
-    .why-row { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
+    .why-row { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
+    .why-item { display: flex; flex-direction: column; }
     .why {
       font: inherit; font-size: var(--fs-xs); color: var(--ink-2); cursor: pointer;
       background: none; border: none; padding: 0; border-bottom: 1px dotted currentColor;
+      width: fit-content;
     }
     .why:hover, .why:focus-visible { color: var(--ink); }
     .why:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .prov { flex-basis: 100%; margin: 0; font-size: var(--fs-xs); color: var(--ink-2); }
+    /* Revealed on hover or focus (no click needed) — the click/toggle behavior still works
+       underneath for touch and keyboard users who can't hover. */
+    .prov {
+      margin: 0; font-size: var(--fs-xs); color: var(--ink-2);
+      max-height: 0; opacity: 0; overflow: hidden;
+      transition: max-height var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), margin-top var(--dur-fast) var(--ease-out);
+    }
+    .why-item:hover .prov, .why-item:focus-within .prov, .why-item.open .prov {
+      max-height: 40px; opacity: 1; margin-top: 4px;
+    }
+    @media (prefers-reduced-motion: reduce) { .prov { transition: none; } }
   `],
 })
 export class ReachDiagramComponent {
   @Input() diagram!: ReachDiagram;
+
+  slotWidth = DIAGRAM_SLOT_WIDTH;
 
   private openNodes = new Set<string>();
 

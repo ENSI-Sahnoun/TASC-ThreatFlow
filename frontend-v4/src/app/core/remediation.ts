@@ -197,7 +197,11 @@ function outcomeNode(metrics: Record<string, string>): DiagramNode {
   if (!parts.length) {
     return { id: 'outcome', title: 'No full-control outcome', detail: 'Nothing in this vector states what it reads, changes or shuts down', from: 'C/I/A' };
   }
-  return { id: 'outcome', title: joinVerbs(parts), detail: joinVerbs(parts), from: from.join('/') };
+  // Unlike origin/gate, the title here already IS the plain-language fact (the verb list) — a
+  // detail line repeating it verbatim said nothing new. This one instead names the box's role
+  // in the sequence (what a successful attempt walks away with), the same way "Already on the
+  // machine" (title) is glossed by "Requires local access..." (detail: what that implies).
+  return { id: 'outcome', title: joinVerbs(parts), detail: 'What a successful attempt gets them', from: from.join('/') };
 }
 
 // AC:L means the exploit works whenever it's tried; AC:H means the attacker needs conditions to
@@ -533,23 +537,32 @@ export interface DiagramEdgeLine {
   x2: number; y2: number;
 }
 
-// Every node's box spans [i*240, i*240+180] at y=10..100 (reach-diagram.component.ts's own
-// translate(i*240, 0) positioning) — a fourth node needs the viewBox widened to fit it, so this
-// is a function of how many nodes the diagram actually has rather than a fixed constant.
+// Each node's box is DIAGRAM_BOX_WIDTH wide; DIAGRAM_SLOT_WIDTH is the stride between node
+// origins, so DIAGRAM_SLOT_WIDTH - DIAGRAM_BOX_WIDTH is the gap between two adjacent boxes.
+// Exported so reach-diagram.component.ts's own translate(i * DIAGRAM_SLOT_WIDTH, 0) positioning
+// can't drift from what this module's own width/edge math assumes.
+export const DIAGRAM_BOX_WIDTH = 180;
+export const DIAGRAM_SLOT_WIDTH = 280;
+
+// Every node's box spans [i*DIAGRAM_SLOT_WIDTH, i*DIAGRAM_SLOT_WIDTH+DIAGRAM_BOX_WIDTH] at
+// y=10..100 — a fourth node needs the viewBox widened to fit it, so this is a function of how
+// many nodes the diagram actually has rather than a fixed constant.
 export function diagramSvgWidth(diagram: ReachDiagram): number {
-  return diagram.nodes.length * 240 + 40;
+  return diagram.nodes.length * DIAGRAM_SLOT_WIDTH + 40;
 }
 
-// An edge is drawn from the tail node's right edge to 10px short of the head node's left edge —
-// matching the component's two original hardcoded <line> elements (x1=180,x2=230 and
-// x1=420,x2=470), generalized so a third edge (outcome->scope) places itself correctly without
-// a third hardcoded line in the template.
+// An edge is drawn from the tail node's right edge to 10px short of the head node's left edge,
+// leaving room for the arrowhead marker.
 export function diagramEdgeLines(diagram: ReachDiagram): DiagramEdgeLine[] {
   const indexOf = new Map(diagram.nodes.map((n, i) => [n.id, i]));
   return diagram.edges.map((e) => {
     const fromIdx = indexOf.get(e.from as DiagramNode['id']) ?? 0;
     const toIdx = indexOf.get(e.to as DiagramNode['id']) ?? 0;
-    return { key: `${e.from}-${e.to}`, x1: fromIdx * 240 + 180, y1: 55, x2: toIdx * 240 - 10, y2: 55 };
+    return {
+      key: `${e.from}-${e.to}`,
+      x1: fromIdx * DIAGRAM_SLOT_WIDTH + DIAGRAM_BOX_WIDTH, y1: 55,
+      x2: toIdx * DIAGRAM_SLOT_WIDTH - 10, y2: 55,
+    };
   });
 }
 
