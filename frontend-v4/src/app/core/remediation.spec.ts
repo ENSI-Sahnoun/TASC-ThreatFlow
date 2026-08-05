@@ -422,3 +422,63 @@ describe('groupActions', () => {
     expect(groupActions(items, now)[0].kev).toEqual({ count: 2, ransomware: true, pastDueCount: 1 });
   });
 });
+
+import { sortActions } from './remediation';
+import type { RemediationAction } from './remediation';
+
+describe('sortActions', () => {
+  const action = (over: Partial<RemediationAction> = {}): RemediationAction => ({
+    key: 'k', fix: { kind: 'none' }, items: [], count: 1,
+    worstScore: null, worstSeverity: null, worstVersion: null,
+    severityCounts: { critical: 0, high: 0, medium: 0, low: 0, none: 0, unknown: 0 },
+    kev: null,
+    ...over,
+  });
+
+  it('the measured case: a 5-threat CVSS 10.0 action outranks a 111-threat CVSS 9.8 action under risk', () => {
+    const noFix = action({ key: 'none', count: 5, worstScore: 10.0 });
+    const upgrade = action({ key: 'version:14.8.8', count: 111, worstScore: 9.8 });
+    expect(sortActions([upgrade, noFix], 'risk')).toEqual([noFix, upgrade]);
+  });
+  it('risk mode breaks a score tie on count', () => {
+    const a = action({ key: 'a', count: 3, worstScore: 9.0 });
+    const b = action({ key: 'b', count: 9, worstScore: 9.0 });
+    expect(sortActions([a, b], 'risk')).toEqual([b, a]);
+  });
+  it('reach mode sorts by count first, worst score breaking ties', () => {
+    const small = action({ key: 'small', count: 5, worstScore: 10.0 });
+    const big = action({ key: 'big', count: 111, worstScore: 9.8 });
+    expect(sortActions([small, big], 'reach')).toEqual([big, small]);
+  });
+  it('reach mode breaks a count tie on worst score', () => {
+    const lower = action({ key: 'lower', count: 4, worstScore: 6.0 });
+    const higher = action({ key: 'higher', count: 4, worstScore: 8.0 });
+    expect(sortActions([lower, higher], 'reach')).toEqual([higher, lower]);
+  });
+  it('any KEV action outranks every non-KEV action regardless of score, under risk', () => {
+    const critical = action({ key: 'critical', worstScore: 10.0, kev: null });
+    const kevLow = action({ key: 'kev', worstScore: 4.0, kev: { count: 1, ransomware: false, pastDueCount: 0 } });
+    expect(sortActions([critical, kevLow], 'risk')).toEqual([kevLow, critical]);
+  });
+  it('any KEV action outranks every non-KEV action regardless of score, under reach too', () => {
+    const bigNonKev = action({ key: 'big', count: 100, kev: null });
+    const smallKev = action({ key: 'kev', count: 1, kev: { count: 1, ransomware: false, pastDueCount: 0 } });
+    expect(sortActions([bigNonKev, smallKev], 'reach')).toEqual([smallKev, bigNonKev]);
+  });
+  it('among several KEV actions, still orders by the active sort mode', () => {
+    const kevA = action({ key: 'a', worstScore: 9.0, kev: { count: 1, ransomware: false, pastDueCount: 0 } });
+    const kevB = action({ key: 'b', worstScore: 9.9, kev: { count: 1, ransomware: false, pastDueCount: 0 } });
+    expect(sortActions([kevA, kevB], 'risk')).toEqual([kevB, kevA]);
+  });
+  it('defaults to risk mode when none is given', () => {
+    const noFix = action({ key: 'none', count: 5, worstScore: 10.0 });
+    const upgrade = action({ key: 'version:14.8.8', count: 111, worstScore: 9.8 });
+    expect(sortActions([upgrade, noFix])).toEqual([noFix, upgrade]);
+  });
+  it('does not mutate the input array', () => {
+    const list = [action({ key: 'a', worstScore: 1 }), action({ key: 'b', worstScore: 9 })];
+    const copy = [...list];
+    sortActions(list, 'risk');
+    expect(list).toEqual(copy);
+  });
+});

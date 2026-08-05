@@ -385,3 +385,38 @@ export function groupActions(items: RemediationQueueItem[], now: Date = new Date
   }
   return actions;
 }
+
+// ---- Part 3 (risk ordering) + Part 4 (the risk <-> reach toggle) ----
+
+export type RiskReachMode = 'risk' | 'reach';
+
+// Part 3's default: worst CVSS in the bundle, descending, count breaking ties. Deliberately
+// buries nothing behind volume — "No fix published" (5 threats, one CVSS 10.0) outranks "upgrade
+// to 14.8.8" (111 threats, worst 9.8): the unfixable 10.0 is what a reader must not miss, and a
+// count-ordered list is exactly what would bury it.
+function riskCompare(a: RemediationAction, b: RemediationAction): number {
+  const as = a.worstScore ?? -1;
+  const bs = b.worstScore ?? -1;
+  if (as !== bs) return bs - as;
+  return b.count - a.count;
+}
+
+// Part 4's toggle: how many threats one action closes, descending, worst score breaking ties.
+function reachCompare(a: RemediationAction, b: RemediationAction): number {
+  if (a.count !== b.count) return b.count - a.count;
+  return (b.worstScore ?? -1) - (a.worstScore ?? -1);
+}
+
+// KEV sorts above every non-KEV action regardless of score (Part 3) — "regardless of score"
+// reads as unconditional, so this precedence holds in both risk and reach mode: an actively
+// exploited action is the thing a reader must not miss no matter which axis they're currently
+// sorting by. Among several KEV actions, the active mode still decides their relative order.
+export function sortActions(actions: RemediationAction[], mode: RiskReachMode = 'risk'): RemediationAction[] {
+  const compare = mode === 'reach' ? reachCompare : riskCompare;
+  return [...actions].sort((a, b) => {
+    const aKev = a.kev ? 1 : 0;
+    const bKev = b.kev ? 1 : 0;
+    if (aKev !== bKev) return bKev - aKev;
+    return compare(a, b);
+  });
+}
