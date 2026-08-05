@@ -482,3 +482,63 @@ describe('sortActions', () => {
     expect(list).toEqual(copy);
   });
 });
+
+import { actionStatus, splitActionsByStatus, NOT_COVERED_SECTION_CAVEAT } from './remediation';
+
+describe('actionStatus', () => {
+  it('is affected when any item in the bundle is still affected', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'version', value: '1.0' }, status: 'not_covered' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '1.0' }, status: 'affected' }),
+    ])[0];
+    expect(actionStatus(a)).toBe('affected');
+  });
+  it('is unknown when nothing is affected but something is unknown', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'version', value: '1.0' }, status: 'not_covered' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '1.0' }, status: 'unknown' }),
+    ])[0];
+    expect(actionStatus(a)).toBe('unknown');
+  });
+  it('is not_covered only when every item in the bundle already reads not_covered', () => {
+    const a = groupActions([
+      item({ itemId: 1, fix: { kind: 'version', value: '1.0' }, status: 'not_covered' }),
+      item({ itemId: 2, fix: { kind: 'version', value: '1.0' }, status: 'not_covered' }),
+    ])[0];
+    expect(actionStatus(a)).toBe('not_covered');
+  });
+});
+
+describe('splitActionsByStatus', () => {
+  it('sorts each action into exactly one of the three sections', () => {
+    const affectedAction = groupActions([item({ itemId: 1, fix: { kind: 'version', value: '1.0' }, status: 'affected' })])[0];
+    const unknownAction = groupActions([item({ itemId: 2, fix: { kind: 'patch', value: 'https://x/a' }, status: 'unknown' })])[0];
+    const notCoveredAction = groupActions([item({ itemId: 3, fix: { kind: 'none' }, status: 'not_covered' })])[0];
+    const sections = splitActionsByStatus([affectedAction, unknownAction, notCoveredAction]);
+    expect(sections.affected).toEqual([affectedAction]);
+    expect(sections.unknown).toEqual([unknownAction]);
+    expect(sections.notCovered).toEqual([notCoveredAction]);
+  });
+  it('an action built from an item with no version bound never reaches the not_covered section', () => {
+    // affectedStatus (server/version_compare.js) abstains to 'unknown' the moment there is no
+    // entry to compare against — this is the queue-side consequence of that abstention: a
+    // no-version-bound action must land in the middle section, never the "resolved" one.
+    const noBoundAction = groupActions([item({ itemId: 1, fix: { kind: 'advisory', value: 'https://x/a' }, entry: null, status: 'unknown' })])[0];
+    const sections = splitActionsByStatus([noBoundAction]);
+    expect(sections.notCovered).toEqual([]);
+    expect(sections.unknown).toEqual([noBoundAction]);
+  });
+  it('is all-empty for an empty action list', () => {
+    expect(splitActionsByStatus([])).toEqual({ affected: [], unknown: [], notCovered: [] });
+  });
+});
+
+describe('NOT_COVERED_SECTION_CAVEAT', () => {
+  it('never contains the word "safe"', () => {
+    expect(NOT_COVERED_SECTION_CAVEAT.toLowerCase()).not.toContain('safe');
+  });
+  it('matches Spec B\'s verbatim not_covered detail wording', () => {
+    expect(NOT_COVERED_SECTION_CAVEAT).toBe(
+      'Not a clean bill of health — confirm against the vendor advisory before treating any of these as closed.');
+  });
+});

@@ -420,3 +420,44 @@ export function sortActions(actions: RemediationAction[], mode: RiskReachMode = 
     return compare(a, b);
   });
 }
+
+// ---- Part 2: three sections once a version is recorded, not two ----
+
+export type ActionStatus = 'affected' | 'unknown' | 'not_covered';
+
+// An action can bundle several CVEs sharing one fix (Part 1) whose affectedStatus can genuinely
+// differ — two ranges ending at the same fixed version don't have to share the same starting
+// bound. Conservative, worst-case-wins precedence: 'affected' the moment any item still needs
+// the fix, 'not_covered' only once every item in the bundle already reads that way. The same
+// posture server/version_compare.js already applies everywhere: never launder a partial
+// abstention into a resolved claim.
+export function actionStatus(action: RemediationAction): ActionStatus {
+  if (action.items.some((i) => i.status === 'affected')) return 'affected';
+  if (action.items.some((i) => i.status === 'unknown')) return 'unknown';
+  return 'not_covered';
+}
+
+export interface ActionSections {
+  affected: RemediationAction[];
+  unknown: RemediationAction[];
+  notCovered: RemediationAction[];
+}
+
+// Callers only invoke this once a version is known (group.versionState === 'known') — before
+// that there is one bucket and no section chrome at all, per Part 2's own rule; that gate lives
+// in the component, not here, so this function's contract stays "split what you're given."
+export function splitActionsByStatus(actions: RemediationAction[]): ActionSections {
+  const sections: ActionSections = { affected: [], unknown: [], notCovered: [] };
+  for (const a of actions) {
+    const status = actionStatus(a);
+    if (status === 'affected') sections.affected.push(a);
+    else if (status === 'unknown') sections.unknown.push(a);
+    else sections.notCovered.push(a);
+  }
+  return sections;
+}
+
+// Verbatim from Spec B's affectedWording(), restated once per section instead of once per row
+// (Part 2) — the system never tells anyone they are safe.
+export const NOT_COVERED_SECTION_CAVEAT =
+  'Not a clean bill of health — confirm against the vendor advisory before treating any of these as closed.';
