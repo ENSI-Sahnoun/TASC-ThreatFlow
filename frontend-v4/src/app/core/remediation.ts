@@ -461,3 +461,24 @@ export function splitActionsByStatus(actions: RemediationAction[]): ActionSectio
 // (Part 2) — the system never tells anyone they are safe.
 export const NOT_COVERED_SECTION_CAVEAT =
   'Not a clean bill of health — confirm against the vendor advisory before treating any of these as closed.';
+
+// ---- Part 4: the filter field ----
+
+function includesQuery(value: string | null | undefined, query: string): boolean {
+  return typeof value === 'string' && value.toLowerCase().includes(query);
+}
+
+// Matches a CVE id or a version-shaped substring (Part 4's own words) — checked against every
+// version-ish value already on the item (what the reader runs, the fix target, and the matched
+// range's own text) so a query like "14.8" finds an item whether it matches what's installed or
+// what the range says, not just one of the two.
+export function filterQueueItems(items: RemediationQueueItem[], query: string): RemediationQueueItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return items;
+  return items.filter((item) => (
+    includesQuery(item.cveId, q)
+    || includesQuery(item.installed, q)
+    || includesQuery(item.fix.kind === 'version' ? item.fix.value : null, q)
+    || includesQuery(item.entry?.text ?? null, q)
+  ));
+}

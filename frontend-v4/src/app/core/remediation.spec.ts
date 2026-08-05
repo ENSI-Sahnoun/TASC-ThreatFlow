@@ -542,3 +542,41 @@ describe('NOT_COVERED_SECTION_CAVEAT', () => {
       'Not a clean bill of health — confirm against the vendor advisory before treating any of these as closed.');
   });
 });
+
+import { filterQueueItems } from './remediation';
+
+describe('filterQueueItems', () => {
+  it('matches a CVE id substring, case-insensitively', () => {
+    const items = [item({ itemId: 1, cveId: 'CVE-2024-49039' }), item({ itemId: 2, cveId: 'CVE-2023-1' })];
+    expect(filterQueueItems(items, '49039').map((i) => i.itemId)).toEqual([1]);
+    expect(filterQueueItems(items, 'cve-2024').map((i) => i.itemId)).toEqual([1]);
+  });
+  it('matches the installed version', () => {
+    const items = [item({ itemId: 1, installed: '14.8.5' }), item({ itemId: 2, installed: '26.0' })];
+    expect(filterQueueItems(items, '14.8').map((i) => i.itemId)).toEqual([1]);
+  });
+  it('matches a version-kind fix target', () => {
+    const items = [
+      item({ itemId: 1, fix: { kind: 'version', value: '14.8.8' } }),
+      item({ itemId: 2, fix: { kind: 'none' } }),
+    ];
+    expect(filterQueueItems(items, '14.8.8').map((i) => i.itemId)).toEqual([1]);
+  });
+  it('matches the matched range text', () => {
+    const items = [item({
+      itemId: 1,
+      entry: {
+        vendor: 'apple', product: 'macos', text: 'before 14.8.8',
+        startIncluding: null, startExcluding: null, endIncluding: null, endExcluding: '14.8.8', pinned: null,
+      },
+    })];
+    expect(filterQueueItems(items, 'before').map((i) => i.itemId)).toEqual([1]);
+  });
+  it('returns everything for an empty or whitespace-only query', () => {
+    const items = [item({ itemId: 1 }), item({ itemId: 2 })];
+    expect(filterQueueItems(items, '   ')).toEqual(items);
+  });
+  it('returns nothing when the query matches nothing', () => {
+    expect(filterQueueItems([item({ itemId: 1, cveId: 'CVE-2024-1' })], 'zzz')).toEqual([]);
+  });
+});
