@@ -24,8 +24,15 @@ import type { Playbook } from '../core/models';
         <ol class="steps">
           @for (s of blocks(); track s.key) {
             <li [class.done]="s.done">
-              <label>
-                <input type="checkbox" [checked]="s.done" (change)="toggle(s.key)" />
+              <label class="check-row">
+                <span class="check">
+                  <input type="checkbox" [checked]="s.done" (change)="toggle(s.key)" />
+                  <span class="box" aria-hidden="true">
+                    <svg class="tick" viewBox="0 0 16 16">
+                      <path d="M3 8.5 L6.5 12 L13 4.5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                  </span>
+                </span>
                 <span class="title">{{ s.title }}</span>
               </label>
               <p class="detail">{{ s.detail }}</p>
@@ -52,17 +59,40 @@ import type { Playbook } from '../core/models';
     }
     .guided-link:hover { text-decoration: underline; }
     .guided-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-    .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-    .steps > li { border-left: 2px solid var(--border); padding-left: 10px; }
-    .steps > li.done { border-left-color: var(--sev-low, #2a2); opacity: 0.75; }
-    label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+    .steps > li + li { padding-top: 16px; border-top: var(--hair) solid var(--hairline); }
+    .steps > li.done { opacity: 0.7; }
     .title { font-weight: 600; }
-    .done .title { text-decoration: line-through; }
-    .detail { margin: 4px 0 2px; color: var(--ink-2); }
-    .link { font-size: var(--fs-xs); word-break: break-all; }
-    .source { margin: 2px 0 0; font-size: var(--fs-xs); color: var(--ink-2); }
+    .done .title { text-decoration: line-through; color: var(--ink-2); }
+    .detail { margin: 6px 0 2px 30px; color: var(--ink-2); }
+    .link { display: block; margin-left: 30px; font-size: var(--fs-xs); word-break: break-all; }
+    .source { margin: 2px 0 0 30px; font-size: var(--fs-xs); color: var(--ink-2); }
     .footer { margin-top: 14px; font-size: var(--fs-xs); color: var(--ink-2); }
     .missing { margin-left: 10px; }
+
+    /* Custom checkbox: the native control stays for a11y/semantics (screen readers, keyboard,
+       form participation) but is visually hidden — the box + tick are a sibling that reads its
+       :checked/:focus-visible state, so no JS is needed beyond the existing toggle() handler. */
+    .check-row { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 28px; }
+    .check { position: relative; width: 20px; height: 20px; flex: none; }
+    .check input {
+      position: absolute; inset: -6px; margin: 0; opacity: 0; cursor: pointer; /* -6px: real hit target ~32px */
+    }
+    .box {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      border-radius: 6px; border: 1.5px solid var(--ink-3); background: var(--surface-2);
+      transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+        transform 100ms var(--ease-out);
+    }
+    .check:hover .box { border-color: var(--ink-2); }
+    .check input:checked + .box { background: var(--accent); border-color: var(--accent); }
+    .check input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .check input:active + .box { transform: scale(.9); }
+    .tick { width: 12px; height: 12px; stroke: var(--bg); opacity: 0; transform: scale(.4); transform-origin: center; transition: opacity 120ms var(--ease-out), transform 160ms var(--ease-out); }
+    .check input:checked + .box .tick { opacity: 1; transform: scale(1); }
+    @media (prefers-reduced-motion: reduce) {
+      .box, .tick, .check input { transition: none; }
+    }
   `],
 })
 export class PlaybookPanelComponent {
