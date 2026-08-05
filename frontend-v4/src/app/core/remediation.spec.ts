@@ -631,11 +631,11 @@ describe('reachDiagram — S:C scope change (Part 7)', () => {
 import { diagramSvgWidth, diagramEdgeLines } from './remediation';
 
 describe('diagramSvgWidth', () => {
-  it('is 880 for the three-node diagram (no scope change)', () => {
-    expect(diagramSvgWidth(reachDiagram({}))).toBe(880);
+  it('is 1060 for the three-node diagram (no scope change)', () => {
+    expect(diagramSvgWidth(reachDiagram({}))).toBe(1060);
   });
-  it('is 1160 for the four-node diagram (S:C)', () => {
-    expect(diagramSvgWidth(reachDiagram({ S: 'C' }))).toBe(1160);
+  it('is 1400 for the four-node diagram (S:C)', () => {
+    expect(diagramSvgWidth(reachDiagram({ S: 'C' }))).toBe(1400);
   });
 });
 
@@ -643,14 +643,14 @@ describe('diagramEdgeLines', () => {
   it('spaces nodes DIAGRAM_SLOT_WIDTH apart for a three-node diagram', () => {
     const lines = diagramEdgeLines(reachDiagram({}));
     expect(lines).toEqual([
-      { key: 'origin-gate', x1: 180, y1: 55, x2: 270, y2: 55 },
-      { key: 'gate-outcome', x1: 460, y1: 55, x2: 550, y2: 55 },
+      { key: 'origin-gate', x1: 180, y1: 55, x2: 330, y2: 55 },
+      { key: 'gate-outcome', x1: 520, y1: 55, x2: 670, y2: 55 },
     ]);
   });
   it('adds a third line to the scope node when S:C', () => {
     const lines = diagramEdgeLines(reachDiagram({ S: 'C' }));
     expect(lines.length).toBe(3);
-    expect(lines[2]).toEqual({ key: 'outcome-scope', x1: 740, y1: 55, x2: 830, y2: 55 });
+    expect(lines[2]).toEqual({ key: 'outcome-scope', x1: 860, y1: 55, x2: 1010, y2: 55 });
   });
 });
 

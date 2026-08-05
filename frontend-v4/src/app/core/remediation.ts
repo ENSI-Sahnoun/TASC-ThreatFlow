@@ -542,7 +542,7 @@ export interface DiagramEdgeLine {
 // Exported so reach-diagram.component.ts's own translate(i * DIAGRAM_SLOT_WIDTH, 0) positioning
 // can't drift from what this module's own width/edge math assumes.
 export const DIAGRAM_BOX_WIDTH = 180;
-export const DIAGRAM_SLOT_WIDTH = 280;
+export const DIAGRAM_SLOT_WIDTH = 340;
 
 // Every node's box spans [i*DIAGRAM_SLOT_WIDTH, i*DIAGRAM_SLOT_WIDTH+DIAGRAM_BOX_WIDTH] at
 // y=10..100 — a fourth node needs the viewBox widened to fit it, so this is a function of how
