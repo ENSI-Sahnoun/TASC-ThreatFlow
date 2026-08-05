@@ -9,10 +9,11 @@ import { severityToken } from '../../core/format';
 import {
   queueSummary, groupProgress, groupHasPastDue, oneUpgradeCloses, closesWording, formatDueDate,
   groupActions, sortActions, splitActionsByStatus, NOT_COVERED_SECTION_CAVEAT,
-  fixWording,
+  fixWording, filterQueueItems, actionProvenance, buildTicketText,
 } from '../../core/remediation';
-import type { RemediationAction } from '../../core/remediation';
+import type { RemediationAction, RiskReachMode } from '../../core/remediation';
 import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/models';
+import { CopyButtonComponent } from '../../ui/copy-button.component';
 
 // One rendered section of an asset's actions once a version is known (Part 2) — 'Still affects
 // you' / "Can't tell from your version" / 'No longer in range', each carrying only the actions
@@ -32,7 +33,7 @@ interface ActionSectionView {
   selector: 'tf-page-remediate',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, PanelComponent, EmptyStateComponent, SkeletonComponent],
+  imports: [RouterLink, PanelComponent, EmptyStateComponent, SkeletonComponent, CopyButtonComponent],
   template: `
     <tf-panel title="Remediation">
       @if (loading()) {
@@ -55,6 +56,15 @@ interface ActionSectionView {
         />
       } @else {
         <p class="summary">{{ summary().open }} open &middot; {{ summary().pastDue }} past due</p>
+        <div class="controls">
+          <input
+            type="text" class="filter" placeholder="Filter by CVE id or version&hellip;"
+            [value]="filterQuery()" (input)="onFilterInput($event)"
+          />
+          <button type="button" class="sort-toggle" (click)="toggleSort()">
+            sort: {{ sortMode() === 'risk' ? 'risk' : 'reach' }} &#8646;
+          </button>
+        </div>
         <ul class="groups">
           @for (g of groups(); track g.vendor + '/' + g.product) {
             <li class="group">
@@ -117,6 +127,15 @@ interface ActionSectionView {
                               }
                             </ul>
                           </details>
+                          <details class="why-disclosure">
+                            <summary>why this action?</summary>
+                            <dl class="prov">
+                              @for (line of provenanceOf(a, g); track line.label) {
+                                <div><dt>{{ line.label }}</dt><dd>{{ line.text }}</dd></div>
+                              }
+                            </dl>
+                          </details>
+                          <tf-copy-button [value]="ticketTextOf(a, g)" label="Copy as ticket" />
                         </li>
                       }
                     </ul>
@@ -162,6 +181,15 @@ interface ActionSectionView {
                           }
                         </ul>
                       </details>
+                      <details class="why-disclosure">
+                        <summary>why this action?</summary>
+                        <dl class="prov">
+                          @for (line of provenanceOf(a, g); track line.label) {
+                            <div><dt>{{ line.label }}</dt><dd>{{ line.text }}</dd></div>
+                          }
+                        </dl>
+                      </details>
+                      <tf-copy-button [value]="ticketTextOf(a, g)" label="Copy as ticket" />
                     </li>
                   }
                 </ul>
@@ -223,6 +251,23 @@ interface ActionSectionView {
     .status-not_covered { color: var(--sev-none); }
     .due { margin-left: auto; color: var(--ink-2); }
 
+    .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .filter {
+      flex: 1; min-width: 0; font: inherit; font-size: var(--fs-sm); background: var(--surface-2);
+      border: var(--hair) solid var(--hairline); border-radius: 6px; padding: 6px 10px; color: var(--ink);
+    }
+    .sort-toggle {
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
+      color: var(--ink); background: var(--surface-2); border: 0; padding: 6px 12px; border-radius: 8px;
+      white-space: nowrap;
+    }
+    .why-disclosure { grid-column: 1 / -1; margin-top: 4px; }
+    .why-disclosure summary { cursor: pointer; font-size: var(--fs-xs); color: var(--ink-2); }
+    .prov { margin: 6px 0 0; display: grid; gap: 4px; }
+    .prov div { display: flex; gap: 8px; font-size: var(--fs-xs); }
+    .prov dt { color: var(--ink-2); min-width: 90px; }
+    .prov dd { margin: 0; color: var(--ink); }
+
     .cta { display: inline-block; margin-top: 8px; font-size: var(--fs-sm); color: var(--accent); text-decoration: none; }
     .cta:hover { text-decoration: underline; }
     .err { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; text-align: center; }
@@ -245,6 +290,9 @@ export class RemediationQueueComponent {
 
   formatDueDate = formatDueDate;
   severityBands = ['critical', 'high', 'medium', 'low', 'none', 'unknown'] as const;
+
+  filterQuery = signal('');
+  sortMode = signal<RiskReachMode>('risk');
 
   constructor() {
     effect(() => {
@@ -278,10 +326,21 @@ export class RemediationQueueComponent {
     return closesWording(oneUpgradeCloses(g.items));
   }
 
+  onFilterInput(ev: Event): void {
+    this.filterQuery.set((ev.target as HTMLInputElement).value);
+  }
+
+  toggleSort(): void {
+    this.sortMode.set(this.sortMode() === 'risk' ? 'reach' : 'risk');
+  }
+
   // Part 3's default: risk order (worst CVSS descending, count breaking ties, KEV first
-  // regardless). Task 13 adds the reach toggle on top of this.
+  // regardless); Part 4's toggle switches to reach. Part 4's filter narrows the ITEMS first, so
+  // a filtered-out threat never survives inside a surviving action's disclosure — actions are
+  // re-derived from the filtered set, not filtered themselves after the fact.
   actionsOf(g: RemediationQueueGroup): RemediationAction[] {
-    return sortActions(groupActions(g.items));
+    const filtered = filterQueueItems(g.items, this.filterQuery());
+    return sortActions(groupActions(filtered), this.sortMode());
   }
 
   // Part 2: only once a version is known is there anything to split — before that there is one
@@ -295,6 +354,14 @@ export class RemediationQueueComponent {
     if (s.unknown.length) views.push({ label: "Can't tell from your version", caveat: null, actions: s.unknown });
     if (s.notCovered.length) views.push({ label: 'No longer in range', caveat: NOT_COVERED_SECTION_CAVEAT, actions: s.notCovered });
     return views;
+  }
+
+  provenanceOf(a: RemediationAction, g: RemediationQueueGroup) {
+    return actionProvenance(a, { vendor: g.vendor, product: g.product });
+  }
+
+  ticketTextOf(a: RemediationAction, g: RemediationQueueGroup): string {
+    return buildTicketText(a, { vendor: g.vendor, product: g.product });
   }
 
   fixHeadline(a: RemediationAction): string {
