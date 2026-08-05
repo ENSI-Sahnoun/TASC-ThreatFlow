@@ -71,4 +71,25 @@ describe('groundingFooter', () => {
   it('handles a null playbook without throwing', () => {
     expect(groundingFooter(null)).toEqual({ groundedIn: [], missing: [] });
   });
+
+  it('recognizes namespaced block-iocs and attack-mitigation step keys from any category module', () => {
+    const pb: Playbook = {
+      steps: [
+        step({ key: 'ransomware:confirm' }),
+        step({ key: 'ransomware:block-iocs' }),
+        step({ key: 'ransomware:attack-mitigation' }),
+      ],
+      done: [],
+    };
+    const { groundedIn } = groundingFooter(pb);
+    expect(groundedIn).toContain('item indicators (IOCs)');
+    expect(groundedIn).toContain('ATT&CK mitigation map');
+  });
+
+  it('does not double-count when a namespaced key happens to share a CVE-builder key name', () => {
+    const pb: Playbook = { steps: [step({ key: 'phishing:confirm' }), step({ key: 'phishing:check-clicked' })], done: [] };
+    const { groundedIn, missing } = groundingFooter(pb);
+    expect(groundedIn).toEqual([]);
+    expect(missing).toEqual([]);
+  });
 });

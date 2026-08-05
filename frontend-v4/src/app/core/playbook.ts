@@ -26,9 +26,13 @@ export function stepBlocks(playbook: Playbook | null | undefined): PlaybookStepB
 
 // Which sources actually contributed a step, and which expected one is absent — read off the
 // step keys themselves rather than re-deriving from raw CVE facts the client never receives.
+// Category-module keys are namespaced (`ransomware:block-iocs`), so the shared suffixes
+// (`block-iocs`, `attack-mitigation`) are matched by suffix, alongside the CVE builder's
+// unnamespaced keys matched verbatim as before.
 export function groundingFooter(playbook: Playbook | null | undefined): { groundedIn: string[]; missing: string[] } {
   if (!playbook) return { groundedIn: [], missing: [] };
   const keys = new Set(playbook.steps.map((s) => s.key));
+  const suffixes = new Set(playbook.steps.map((s) => s.key.split(':').pop()));
   const groundedIn: string[] = [];
   const missing: string[] = [];
 
@@ -39,6 +43,9 @@ export function groundingFooter(playbook: Playbook | null | undefined): { ground
   else if (keys.has('watch-vendor')) missing.push('vendor patch link');
 
   if (keys.has('restrict') || keys.has('rotate')) groundedIn.push('CVSS vector');
+
+  if (suffixes.has('block-iocs')) groundedIn.push('item indicators (IOCs)');
+  if (suffixes.has('attack-mitigation')) groundedIn.push('ATT&CK mitigation map');
 
   return { groundedIn, missing };
 }
