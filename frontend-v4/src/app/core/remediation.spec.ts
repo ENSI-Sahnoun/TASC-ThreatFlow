@@ -627,3 +627,29 @@ describe('reachDiagram — S:C scope change (Part 7)', () => {
     expect(withoutScope.edges).toEqual([{ from: 'origin', to: 'gate' }, { from: 'gate', to: 'outcome' }]);
   });
 });
+
+import { diagramSvgWidth, diagramEdgeLines } from './remediation';
+
+describe('diagramSvgWidth', () => {
+  it('is 760 for the three-node diagram (no scope change)', () => {
+    expect(diagramSvgWidth(reachDiagram({}))).toBe(760);
+  });
+  it('is 1000 for the four-node diagram (S:C)', () => {
+    expect(diagramSvgWidth(reachDiagram({ S: 'C' }))).toBe(1000);
+  });
+});
+
+describe('diagramEdgeLines', () => {
+  it('matches the two original hardcoded lines for a three-node diagram', () => {
+    const lines = diagramEdgeLines(reachDiagram({}));
+    expect(lines).toEqual([
+      { key: 'origin-gate', x1: 180, y1: 55, x2: 230, y2: 55 },
+      { key: 'gate-outcome', x1: 420, y1: 55, x2: 470, y2: 55 },
+    ]);
+  });
+  it('adds a third line to the scope node when S:C', () => {
+    const lines = diagramEdgeLines(reachDiagram({ S: 'C' }));
+    expect(lines.length).toBe(3);
+    expect(lines[2]).toEqual({ key: 'outcome-scope', x1: 660, y1: 55, x2: 710, y2: 55 });
+  });
+});

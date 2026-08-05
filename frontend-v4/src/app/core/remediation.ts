@@ -524,3 +524,31 @@ export function filterQueueItems(items: RemediationQueueItem[], query: string): 
     || includesQuery(item.entry?.text ?? null, q)
   ));
 }
+
+// ---- Part 7's layout math for tf-reach-diagram's SVG ----
+
+export interface DiagramEdgeLine {
+  key: string;
+  x1: number; y1: number;
+  x2: number; y2: number;
+}
+
+// Every node's box spans [i*240, i*240+180] at y=10..100 (reach-diagram.component.ts's own
+// translate(i*240, 0) positioning) — a fourth node needs the viewBox widened to fit it, so this
+// is a function of how many nodes the diagram actually has rather than a fixed constant.
+export function diagramSvgWidth(diagram: ReachDiagram): number {
+  return diagram.nodes.length * 240 + 40;
+}
+
+// An edge is drawn from the tail node's right edge to 10px short of the head node's left edge —
+// matching the component's two original hardcoded <line> elements (x1=180,x2=230 and
+// x1=420,x2=470), generalized so a third edge (outcome->scope) places itself correctly without
+// a third hardcoded line in the template.
+export function diagramEdgeLines(diagram: ReachDiagram): DiagramEdgeLine[] {
+  const indexOf = new Map(diagram.nodes.map((n, i) => [n.id, i]));
+  return diagram.edges.map((e) => {
+    const fromIdx = indexOf.get(e.from as DiagramNode['id']) ?? 0;
+    const toIdx = indexOf.get(e.to as DiagramNode['id']) ?? 0;
+    return { key: `${e.from}-${e.to}`, x1: fromIdx * 240 + 180, y1: 55, x2: toIdx * 240 - 10, y2: 55 };
+  });
+}
