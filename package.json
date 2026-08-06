@@ -14,13 +14,13 @@
   },
   "dependencies": {
     "express": "^4.21.2",
+    "headroom-ai": "^0.22.4",
     "pg": "^8.22.0",
     "rss-parser": "^3.13.0"
   },
   "directories": {
     "doc": "docs"
   },
-  "devDependencies": {},
   "keywords": [],
   "author": "",
   "license": "ISC"

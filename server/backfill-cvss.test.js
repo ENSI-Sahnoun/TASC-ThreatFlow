@@ -6,7 +6,7 @@ const { backfill, backfillRow } = require('./backfill-cvss');
 const RAW_V2 = JSON.stringify({
   id: 'CVE-2002-1',
   metrics: { cvssMetricV2: [{ cvssData: { baseScore: 5.0 }, baseSeverity: 'MEDIUM' }] },
-  configurations: [{ nodes: [{ cpeMatch: [{ criteria: 'cpe:2.3:a:sendmail:sendmail:8.9.3:*:*:*:*:*:*:*' }] }] }],
+  configurations: [{ nodes: [{ cpeMatch: [{ vulnerable: true, criteria: 'cpe:2.3:a:sendmail:sendmail:8.9.3:*:*:*:*:*:*:*' }] }] }],
 });
 
 async function seed(store, raw, cols = {}) {

@@ -30,6 +30,12 @@ function cpesFromRaw(raw) {
   for (const config of raw.configurations || []) {
     for (const node of (config && config.nodes) || []) {
       for (const match of (node && node.cpeMatch) || []) {
+        // vulnerable: false is NVD's own marker for a platform/"runs on" requirement AND-ed
+        // into the same configuration (e.g. ".NET is vulnerable, on Windows") — not a second
+        // vulnerable product. Keeping it would match a profile's OS asset to a CVE the OS was
+        // never actually vulnerable to, and since cve_intel.affected_versions rightly has no
+        // entry for that OS, affectedStatus() could then never resolve past 'unknown'.
+        if (!(match && match.vulnerable === true)) continue;
         const parsed = parseCpe(match && match.criteria);
         if (!parsed) continue;
         const key = `${parsed.part}:${parsed.vendor}:${parsed.product}`;

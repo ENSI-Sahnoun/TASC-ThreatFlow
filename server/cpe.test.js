@@ -38,9 +38,9 @@ test('cpesFromRaw walks configurations and de-duplicates across versions', () =>
     configurations: [{
       nodes: [{
         cpeMatch: [
-          { criteria: 'cpe:2.3:a:fortinet:fortios:7.0.1:*:*:*:*:*:*:*' },
-          { criteria: 'cpe:2.3:a:fortinet:fortios:7.0.2:*:*:*:*:*:*:*' },
-          { criteria: 'cpe:2.3:o:fortinet:fortiosos:*:*:*:*:*:*:*:*' },
+          { vulnerable: true, criteria: 'cpe:2.3:a:fortinet:fortios:7.0.1:*:*:*:*:*:*:*' },
+          { vulnerable: true, criteria: 'cpe:2.3:a:fortinet:fortios:7.0.2:*:*:*:*:*:*:*' },
+          { vulnerable: true, criteria: 'cpe:2.3:o:fortinet:fortiosos:*:*:*:*:*:*:*:*' },
         ],
       }],
     }],
@@ -49,6 +49,36 @@ test('cpesFromRaw walks configurations and de-duplicates across versions', () =>
     { part: 'a', vendor: 'fortinet', product: 'fortios' },
     { part: 'o', vendor: 'fortinet', product: 'fortiosos' },
   ]);
+});
+
+// NVD's own distinction between "this is the vulnerable software" and "the vulnerable software
+// only when running on this platform" — a second AND-ed node in the same configuration, every
+// cpeMatch in it carrying vulnerable: false. Keeping those would attribute a CVE to every OS it
+// merely runs on (Windows, macOS, Linux...) as if that OS were itself the vulnerable product —
+// producing an asset match with no corresponding cve_intel.affected_versions entry, so
+// affectedStatus() can never resolve it above 'unknown' no matter what version is on file.
+test('cpesFromRaw drops vulnerable:false cpeMatch entries (platform "runs on" requirements)', () => {
+  const raw = {
+    configurations: [{
+      operator: 'AND',
+      nodes: [
+        { operator: 'OR', cpeMatch: [{ vulnerable: true, criteria: 'cpe:2.3:a:microsoft:.net_framework:4.8:*:*:*:*:*:*:*' }] },
+        { operator: 'OR', cpeMatch: [{ vulnerable: false, criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:-:*:*:*:*:*:x64:*' }] },
+      ],
+    }],
+  };
+  assert.deepStrictEqual(cpesFromRaw(raw), [
+    { part: 'a', vendor: 'microsoft', product: '.net_framework' },
+  ]);
+});
+
+test('cpesFromRaw treats a missing vulnerable field as non-vulnerable, not as an assumed match', () => {
+  const raw = {
+    configurations: [{
+      nodes: [{ cpeMatch: [{ criteria: 'cpe:2.3:o:microsoft:windows_11_24h2:-:*:*:*:*:*:*:*' }] }],
+    }],
+  };
+  assert.deepStrictEqual(cpesFromRaw(raw), []);
 });
 
 test('cpesFromRaw returns [] for absent or malformed structures', () => {

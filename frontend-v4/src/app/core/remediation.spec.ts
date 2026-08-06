@@ -148,6 +148,21 @@ describe('oneUpgradeCloses', () => {
     const items = [shared, item({ itemId: 2, fix: { kind: 'version', value: '7.4.5' } })];
     expect(oneUpgradeCloses(items)!.count).toBe(items.length);
   });
+  it('excludes items already not_covered — an upgrade already recorded closes nothing new', () => {
+    const items = [
+      item({ itemId: 1, status: 'not_covered', fix: { kind: 'version', value: '7.4.5' } }),
+      item({ itemId: 2, status: 'not_covered', fix: { kind: 'version', value: '7.4.5' } }),
+    ];
+    expect(oneUpgradeCloses(items)).toBeNull();
+  });
+  it('counts only the still-open items sharing a version target, not resolved ones', () => {
+    const items = [
+      item({ itemId: 1, status: 'affected', fix: { kind: 'version', value: '7.4.5' } }),
+      item({ itemId: 2, status: 'unknown', fix: { kind: 'version', value: '7.4.5' } }),
+      item({ itemId: 3, status: 'not_covered', fix: { kind: 'version', value: '7.4.5' } }),
+    ];
+    expect(oneUpgradeCloses(items)).toEqual({ value: '7.4.5', count: 2 });
+  });
   it('is null for an empty list', () => {
     expect(oneUpgradeCloses([])).toBeNull();
   });

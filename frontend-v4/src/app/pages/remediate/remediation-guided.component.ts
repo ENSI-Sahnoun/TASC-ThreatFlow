@@ -25,6 +25,7 @@ import type { RemediationDetail } from '../../core/models';
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, PanelComponent, ReachDiagramComponent, PlaybookPanelComponent, PlaybookFlowComponent, EmptyStateComponent, SkeletonComponent],
+  host: { '(document:keydown.escape)': 'onAssistEscape()' },
   template: `
     @if (loading()) {
       <tf-skeleton [rows]="10" />
@@ -35,7 +36,6 @@ import type { RemediationDetail } from '../../core/models';
       <a class="back" [routerLink]="['/intel', d.item.id]">&larr; Back to item</a>
       <h1>{{ d.item.title }}</h1>
 
-      <div class="layout">
       <div class="stack">
       <!-- The affected-version verdict and fix panel are CVE-only concepts (CPE-matched asset,
            affected-version range) — gated on category, not on vector presence: a CVE item can
@@ -149,49 +149,110 @@ import type { RemediationDetail } from '../../core/models';
       }
       </div>
 
-      <aside class="assist" [class.open]="assistOpen()">
-        <button type="button" class="assist-toggle" [attr.aria-expanded]="assistOpen()" (click)="assistOpen.set(!assistOpen())">
-          <span>AI Assist</span>
-        </button>
-        @if (assistOpen()) {
-          <div class="assist-body">
-            <h2>AI Assist</h2>
-            <p class="assist-status">Coming soon</p>
-            <p>A plain-language explanation of this vulnerability, generated on demand from the facts already on this page.</p>
-          </div>
-        }
+      <button
+        type="button" class="assist-fab" [class.hidden]="assistOpen()"
+        [attr.aria-expanded]="assistOpen()" (click)="assistOpen.set(true)"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" />
+        </svg>
+        AI Assist
+      </button>
+
+      @if (assistOpen()) {
+        <div class="assist-scrim" (click)="assistOpen.set(false)"></div>
+      }
+
+      <aside
+        class="assist-drawer" [class.open]="assistOpen()" role="complementary" aria-label="AI Assist"
+        [attr.aria-hidden]="!assistOpen()" [attr.inert]="assistOpen() ? null : ''"
+      >
+        <header class="drawer-head">
+          <h2>AI Assist</h2>
+          <button type="button" class="close" aria-label="Close AI Assist" (click)="assistOpen.set(false)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <path d="M6 6 18 18M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <div class="drawer-body">
+          <p class="assist-status">Coming soon</p>
+          <p>A plain-language explanation of this vulnerability, generated on demand from the facts already on this page.</p>
+        </div>
       </aside>
-      </div>
     }
   `,
   styles: [`
     .back { font-size: var(--fs-xs); color: var(--ink-2); text-decoration: none; }
     h1 { font-size: var(--fs-lg); margin: 8px 0 12px; }
-    .stack { display: grid; gap: 16px; }
-    .layout { display: flex; align-items: flex-start; gap: 16px; }
-    .layout > .stack { flex: 1; min-width: 0; }
-    .assist {
-      flex: 0 0 34px; display: flex; flex-direction: column; align-items: stretch;
-      background: var(--surface); border: var(--hair) solid var(--hairline); border-radius: var(--radius-card);
-      overflow: hidden; transition: flex-basis var(--dur) var(--ease-out);
+    /* minmax(0, 1fr) on the implicit column, not just min-width:0 on the container: Grid tracks
+       default to max-content, so without this the reach diagram's intrinsic width (it renders
+       wider than the panel) drags the whole column — and the page — wider than the viewport. */
+    .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+
+    /* Floating trigger, same idiom as the shell's sync-badge: fixed to the viewport so it never
+       competes with the reading column for width, and it's still reachable at any scroll depth. */
+    .assist-fab {
+      position: fixed; right: 20px; bottom: 20px; z-index: var(--z-toast);
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590; color: var(--ink);
+      display: flex; align-items: center; gap: 7px;
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+      border: var(--hair) solid var(--hairline); border-radius: var(--radius-chrome);
+      padding: 9px 16px 9px 12px; box-shadow: 0 8px 24px -8px rgba(0, 0, 20, .5);
+      transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out),
+        opacity var(--dur) var(--ease-out), visibility var(--dur) var(--ease-out);
     }
-    .assist.open { flex-basis: 280px; }
-    .assist-toggle {
-      appearance: none; cursor: pointer; font: inherit; background: none; border: 0; color: var(--ink-2);
-      padding: 12px 0; display: flex; align-items: center; justify-content: center; flex: none;
+    .assist-fab svg { flex: none; color: var(--accent); }
+    .assist-fab:hover { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); transform: translateY(-1px); }
+    .assist-fab:active { transform: translateY(0) scale(.97); }
+    .assist-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .assist-fab.hidden { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(4px); }
+
+    .assist-scrim {
+      position: fixed; inset: 0; z-index: var(--z-drawer-scrim);
+      background: color-mix(in srgb, var(--bg) 55%, transparent);
+      animation: scrim-in var(--dur) var(--ease-out);
     }
-    .assist:not(.open) .assist-toggle span {
-      writing-mode: vertical-rl; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .02em;
+    @keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Fixed slide-in drawer, same construction as the story drawer: overlays rather than
+       shares the row, so it can never squeeze the reading column or clip mid-diagram again. */
+    .assist-drawer {
+      position: fixed; right: 0; top: 0; bottom: 0; width: min(340px, 92vw);
+      background: var(--chrome); backdrop-filter: blur(34px) saturate(180%);
+      z-index: var(--z-drawer); border-left: var(--hair) solid var(--hairline);
+      display: flex; flex-direction: column;
+      transform: translateX(100%); pointer-events: none;
+      transition: transform var(--dur-drawer) var(--ease);
     }
-    .assist.open .assist-toggle { justify-content: flex-start; padding: 12px 16px 0; }
-    .assist-body { padding: 4px 16px 16px; }
-    .assist-body h2 { margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
+    .assist-drawer.open { transform: translateX(0); pointer-events: auto; }
+    .drawer-head {
+      display: flex; align-items: center; gap: 8px; flex: none;
+      padding: 14px 16px; border-bottom: var(--hair) solid var(--hairline);
+    }
+    .drawer-head h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); flex: 1; }
+    .drawer-head .close {
+      appearance: none; border: 0; cursor: pointer; background: transparent;
+      color: var(--ink-3); width: 24px; height: 24px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+    }
+    .drawer-head .close:hover { color: var(--ink); background: var(--surface-2); }
+    .drawer-head .close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .drawer-head .close:active { background: var(--surface-3); }
+    .drawer-body { padding: 16px; overflow-y: auto; flex: 1; }
     .assist-status {
       display: inline-block; margin: 0 0 8px; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-2);
       background: var(--surface-2); padding: 2px 8px; border-radius: 999px;
     }
-    .assist-body p:not(.assist-status) { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }
-    @media (prefers-reduced-motion: reduce) { .assist { transition: none; } }
+    .drawer-body p:not(.assist-status) { margin: 0; font-size: var(--fs-sm); color: var(--ink-2); }
+    @media (max-width: 640px) { .assist-drawer { width: 100vw; border-left: 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .assist-fab { transition: none; }
+      .assist-scrim { animation: none; }
+      .assist-drawer { transform: translateX(0); opacity: 0; transition: opacity var(--dur-drawer) linear; }
+      .assist-drawer.open { opacity: 1; }
+    }
     .range { margin: 0 0 10px; font-size: var(--fs-sm); color: var(--ink-2); }
     .verdict { margin: 0 0 14px; animation: verdict-in 180ms var(--ease-out); }
     @keyframes verdict-in { from { opacity: 0; } to { opacity: 1; } }
@@ -370,6 +431,10 @@ export class RemediationGuidedComponent {
         if (err.status === 404) this.notFound.set(true);
       },
     });
+  }
+
+  onAssistEscape(): void {
+    if (this.assistOpen()) this.assistOpen.set(false);
   }
 
   onVersionInput(ev: Event): void {

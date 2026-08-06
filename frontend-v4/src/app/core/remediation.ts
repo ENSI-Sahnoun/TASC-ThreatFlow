@@ -83,10 +83,15 @@ export interface UpgradeCloses {
 // target — never for patch/advisory/none, because two patch URLs are not one action, and a
 // single vendor advisory page is not "one upgrade" either. When more than one version value
 // would qualify, the larger group wins (the more consequential single action to surface).
+//
+// Excludes items already read not_covered: those threats are already closed by whatever version
+// is on file, so counting them here would suggest an upgrade that closes nothing new — exactly
+// the case where a reader has already recorded the fixed version and the banner still claims the
+// upgrade is outstanding.
 export function oneUpgradeCloses(items: RemediationQueueItem[]): UpgradeCloses | null {
   const counts = new Map<string, number>();
   for (const item of items) {
-    if (item.fix.kind !== 'version') continue;
+    if (item.fix.kind !== 'version' || item.status === 'not_covered') continue;
     counts.set(item.fix.value, (counts.get(item.fix.value) ?? 0) + 1);
   }
   let best: UpgradeCloses | null = null;
