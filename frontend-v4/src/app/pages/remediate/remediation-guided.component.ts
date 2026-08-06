@@ -37,6 +37,13 @@ import type { RemediationDetail } from '../../core/models';
 
       <div class="layout">
       <div class="stack">
+      <!-- The affected-version verdict and fix panel are CVE-only concepts (CPE-matched asset,
+           affected-version range) — gated on category, not on vector presence: a CVE item can
+           legitimately carry no CVSS vector (NVD sometimes ships a bare score with no full
+           vector string) while still having a real playbook and a real CPE-matched asset, and
+           both must still render for it. A non-CVE category (phishing etc) never has either. -->
+      @if (d.item.category === 'cve') {
+      @if (metrics()) {
       <tf-panel title="What this does">
         <tf-reach-diagram [diagram]="diagram()" />
         @if (d.kevListed) {
@@ -50,6 +57,7 @@ import type { RemediationDetail } from '../../core/models';
           </p>
         }
       </tf-panel>
+      }
 
       @if (!d.asset) {
         <tf-panel title="Are you affected">
@@ -110,6 +118,7 @@ import type { RemediationDetail } from '../../core/models';
             </ul>
           }
         </tf-panel>
+      }
       }
 
       @if (hasFlow(d.item.category)) {
@@ -344,9 +353,11 @@ export class RemediationGuidedComponent {
     this.versionError.set(null);
     this.api.itemRemediation(this.id).subscribe({
       next: (d) => {
-        // No vector, nothing to guide through — redirect to the item detail page (spec's
-        // "Item has no CVE / no vector" degraded state).
-        if (!parseVectorMetrics(d.item.cvss_vector)) {
+        // No vector AND no playbook — genuinely nothing to guide through, so redirect to the
+        // item detail page (spec's "Item has no CVE / no vector" degraded state). A category
+        // playbook (phishing etc, gated by relevance.js to act_now/watch tiers) is enough on its
+        // own to keep this page open even with no CVSS vector to draw the reach diagram from.
+        if (!parseVectorMetrics(d.item.cvss_vector) && !d.playbook) {
           this.router.navigate(['/intel', d.item.id], { replaceUrl: true });
           return;
         }
