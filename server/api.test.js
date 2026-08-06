@@ -1600,3 +1600,23 @@ test('GET /api/items/:id/remediation returns playbook as { steps, done }, carryi
     assert.deepStrictEqual(res.body.playbook.done, [firstKey]);
   } finally { await cleanup(); }
 });
+
+test('GET /api/items/:id includes cwes for an item with item_cwes rows, and an empty array without any', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const sid = (await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('NVD-cwe','nvd',true) RETURNING id")).id;
+    const withCwes = await store.get(
+      "INSERT INTO items (source_id, category, title, external_id) VALUES ($1,'cve','CVE-2026-1','CVE-2026-1') RETURNING id", [sid]);
+    await store.run("INSERT INTO item_cwes (item_id, cwe_id) VALUES ($1,'CWE-79'), ($1,'CWE-89')", [withCwes.id]);
+    const withoutCwes = await store.get(
+      "INSERT INTO items (source_id, category, title, external_id) VALUES ($1,'cve','CVE-2026-2','CVE-2026-2') RETURNING id", [sid]);
+
+    const res1 = await get(app, `/api/items/${withCwes.id}`);
+    assert.deepStrictEqual(res1.body.cwes, ['CWE-79', 'CWE-89']);
+
+    const res2 = await get(app, `/api/items/${withoutCwes.id}`);
+    assert.deepStrictEqual(res2.body.cwes, []);
+  } finally { await cleanup(); }
+});

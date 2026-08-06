@@ -2,6 +2,7 @@ const { normalizedItem } = require('./shape');
 const { categoryBucket } = require('../normalize');
 const { metricFromNvd, scoreFromVector, severityFromScore } = require('../cvss');
 const { cpesFromRaw } = require('../cpe');
+const { cwesFromRaw } = require('../cwe');
 
 const kev = {
   async fetch(source, ctx) {
@@ -280,6 +281,7 @@ const nvdCve = {
           cvssVersion: metric ? metric.version : null,
           severity: metric ? metric.severity : null,
           cpes: cpesFromRaw(cve),
+          cwes: cwesFromRaw(cve),
         },
       });
     });

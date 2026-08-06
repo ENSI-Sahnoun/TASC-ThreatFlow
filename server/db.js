@@ -83,6 +83,17 @@ async function applySchema(s = store) {
     CREATE INDEX IF NOT EXISTS idx_item_cpes_vendor  ON item_cpes(vendor);
     CREATE INDEX IF NOT EXISTS idx_item_cpes_product ON item_cpes(product);
 
+    -- CWE (weakness type). NVD's own weaknesses[] field, sitting unused in items.raw_json since
+    -- the first sync -- server/cwe.js:cwesFromRaw extracts it. Same shape as item_cpes/
+    -- item_actors: a child table, ON DELETE CASCADE, indexed on the lookup column for the
+    -- eventual CWE -> CAPEC -> ATT&CK-technique join (a separate, not-yet-designed spec).
+    CREATE TABLE IF NOT EXISTS item_cwes (
+      item_id INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      cwe_id  TEXT NOT NULL,
+      PRIMARY KEY (item_id, cwe_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_cwes_cwe_id ON item_cwes(cwe_id);
+
     -- Profiles are personas, not accounts: no password, no session, no boundary between them.
     -- The loopback bind below is what keeps the unauthenticated API safe.
     CREATE TABLE IF NOT EXISTS profiles (

@@ -91,8 +91,8 @@ interface EntityLink { key: string; label: string; path: string[]; }
       />
 
       <tf-panel title="Entities">
-        @if (entities().length === 0 && d.domains.length === 0) {
-          <tf-empty-state reason="No CVEs, actors, malware families or domain tags extracted for this item" />
+        @if (entities().length === 0 && d.domains.length === 0 && d.cwes.length === 0) {
+          <tf-empty-state reason="No CVEs, actors, malware families, CWEs or domain tags extracted for this item" />
         } @else {
           <div class="entities">
             @for (e of entities(); track e.key) {
@@ -100,6 +100,9 @@ interface EntityLink { key: string; label: string; path: string[]; }
             }
             @for (dom of d.domains; track dom) {
               <span class="entity tag">{{ dom }}</span>
+            }
+            @for (cwe of d.cwes; track cwe) {
+              <span class="entity tag">{{ cwe }}</span>
             }
           </div>
         }

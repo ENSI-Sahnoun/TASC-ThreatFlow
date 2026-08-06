@@ -106,6 +106,7 @@ function enrichItem(item, { kevCveSet } = { kevCveSet: new Set() }) {
     families,
     domains: domainList,
     cpes: native.cpes || [],
+    cwes: native.cwes || [],
     severity,
     cvssScore,
     cvssVersion,

@@ -329,7 +329,7 @@ test('nvd_cve de-duplicates a CVE returned by both passes', async () => {
 test('nvd_cve extracts v2 metrics and CPEs', async () => {
   const rec = nvdRecord('CVE-2026-2', '2026-07-20T00:00:00', {
     metrics: { cvssMetricV2: [{ cvssData: { baseScore: 5.0 }, baseSeverity: 'MEDIUM' }] },
-    configurations: [{ nodes: [{ cpeMatch: [{ criteria: 'cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*' }] }] }],
+    configurations: [{ nodes: [{ cpeMatch: [{ vulnerable: true, criteria: 'cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*' }] }] }],
   });
   const ctx = nvdCtx({ pub: { vulnerabilities: [rec], totalResults: 1 }, mod: { vulnerabilities: [], totalResults: 0 } });
   const [item] = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
@@ -337,6 +337,16 @@ test('nvd_cve extracts v2 metrics and CPEs', async () => {
   assert.strictEqual(item.native.cvssVersion, '2.0');
   assert.strictEqual(item.native.severity, 'medium');
   assert.deepStrictEqual(item.native.cpes, [{ part: 'a', vendor: 'fortinet', product: 'fortios' }]);
+});
+
+test('nvd_cve extracts CWE ids alongside CPEs', async () => {
+  const rec = nvdRecord('CVE-2026-3', '2026-07-20T00:00:00', {
+    weaknesses: [{ type: 'Primary', description: [{ lang: 'en', value: 'CWE-79' }] }],
+    configurations: [{ nodes: [{ cpeMatch: [{ vulnerable: true, criteria: 'cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*' }] }] }],
+  });
+  const ctx = nvdCtx({ pub: { vulnerabilities: [rec], totalResults: 1 }, mod: { vulnerabilities: [], totalResults: 0 } });
+  const [item] = await bespoke.nvd_cve.fetch({ url: 'https://nvd.test/cves' }, ctx);
+  assert.deepStrictEqual(item.native.cwes, ['CWE-79']);
 });
 
 // A page cap that drops records silently is the same defect class as the old lastMod window.

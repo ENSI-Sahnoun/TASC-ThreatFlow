@@ -723,6 +723,7 @@ function createApp(store) {
     const actors = (await store.all('SELECT actor FROM item_actors WHERE item_id = $1', [id])).map((r) => r.actor);
     const families = (await store.all('SELECT family FROM item_malware_families WHERE item_id = $1', [id])).map((r) => r.family);
     const domains = (await store.all('SELECT domain FROM item_domains WHERE item_id = $1', [id])).map((r) => r.domain);
+    const cwes = (await store.all('SELECT cwe_id FROM item_cwes WHERE item_id = $1', [id])).map((r) => r.cwe_id);
     const ipIntel = {};
     for (const io of iocs) {
       if (io.type === 'ip' && !ipIntel[io.value]) {
@@ -745,7 +746,7 @@ function createApp(store) {
        WHERE cl.primary_item_id = $1`, [id]);
 
     res.json({
-      ...item, raw, cves, iocs, actors, families, domains, ip_intel: ipIntel,
+      ...item, raw, cves, iocs, actors, families, domains, cwes, ip_intel: ipIntel,
       clusterId: cluster ? cluster.id : null,
       relatedStoryCount: cluster ? cluster.related_count : 0,
       relevance,

@@ -110,6 +110,7 @@ export interface ItemDetail extends Item {
   actors: string[];
   families: string[];
   domains: string[];
+  cwes: string[];
   ip_intel: Record<string, IpIntelEntry>;
   raw: unknown;
   // Null unless this item is a cluster's primary — only a primary can carry related stories,

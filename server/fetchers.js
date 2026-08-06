@@ -90,7 +90,7 @@ async function writeItem(t, sourceId, item, enr) {
   const isNew = inserted.inserted === true;
 
   // Enrichment child rows are idempotent: clear then re-insert for this item.
-  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains', 'item_cpes']) {
+  for (const tbl of ['item_cves', 'item_iocs', 'item_actors', 'item_malware_families', 'item_domains', 'item_cpes', 'item_cwes']) {
     await t.run(`DELETE FROM ${tbl} WHERE item_id = $1`, [itemId]);
   }
   for (const c of enr.cves) await t.run('INSERT INTO item_cves (item_id, cve_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, c]);
@@ -101,6 +101,9 @@ async function writeItem(t, sourceId, item, enr) {
   for (const c of enr.cpes || []) {
     await t.run('INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
       [itemId, c.part, c.vendor, c.product]);
+  }
+  for (const c of enr.cwes || []) {
+    await t.run('INSERT INTO item_cwes (item_id, cwe_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [itemId, c]);
   }
   return { itemId, isNew };
 }

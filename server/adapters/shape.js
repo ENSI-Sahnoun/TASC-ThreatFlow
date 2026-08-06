@@ -43,6 +43,7 @@ function normalizedItem(fields = {}) {
       cveIds: native.cveIds || [],
       iocs,
       cpes: native.cpes || [],
+      cwes: native.cwes || [],
       malwareFamilies: native.malwareFamilies || [],
       actors: native.actors || [],
       vendor: native.vendor || null,

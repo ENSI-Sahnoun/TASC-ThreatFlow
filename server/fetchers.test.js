@@ -205,6 +205,39 @@ test('enrichItem defaults cpes to an empty array', () => {
   assert.deepStrictEqual(enr.cpes, []);
 });
 
+test('writeItem persists item_cwes and re-writing replaces them', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('cwe-src','json_api',true) RETURNING id");
+    const item = { external_id: 'CVE-2026-2', category: 'cve', title: 'CVE-2026-2', raw: null, native: {} };
+    const enr = {
+      cves: [], iocs: [], actors: [], families: [], domains: [],
+      severity: null, cvssScore: null, cvssVersion: null, epssScore: null,
+      exploitationStatus: null, vendor: null, region: null, industry: null, threatType: null,
+      cpes: [], cwes: ['CWE-79', 'CWE-89'],
+    };
+    await store.tx(async (t) => { await writeItem(t, src.id, item, enr); });
+    let rows = await store.all('SELECT cwe_id FROM item_cwes WHERE item_id = (SELECT id FROM items WHERE external_id = $1) ORDER BY cwe_id', ['CVE-2026-2']);
+    assert.deepStrictEqual(rows.map((r) => r.cwe_id), ['CWE-79', 'CWE-89']);
+
+    enr.cwes = ['CWE-352'];
+    await store.tx(async (t) => { await writeItem(t, src.id, item, enr); });
+    rows = await store.all('SELECT cwe_id FROM item_cwes WHERE item_id = (SELECT id FROM items WHERE external_id = $1) ORDER BY cwe_id', ['CVE-2026-2']);
+    assert.deepStrictEqual(rows.map((r) => r.cwe_id), ['CWE-352']);
+  } finally { await cleanup(); }
+});
+
+test('enrichItem passes native.cwes through', () => {
+  const enr = enrichItem({ category: 'cve', title: 'x', summary: '', native: { cwes: ['CWE-79'] } });
+  assert.deepStrictEqual(enr.cwes, ['CWE-79']);
+});
+
+test('enrichItem defaults cwes to an empty array', () => {
+  const enr = enrichItem({ category: 'news', title: 'x', summary: '', native: {} });
+  assert.deepStrictEqual(enr.cwes, []);
+});
+
 // CERT-EU emits "Wed, 08 Apr 2026 18:00:00 CEST". JS Date only recognises the RFC-822 US
 // zone abbreviations, so CEST/CET parse as Invalid Date and the row loses its date entirely.
 test('normalizeDate resolves European timezone abbreviations', () => {
