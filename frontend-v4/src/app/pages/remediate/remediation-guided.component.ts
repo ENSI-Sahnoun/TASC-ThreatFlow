@@ -7,12 +7,14 @@ import { ProfileService } from '../../core/profile.service';
 import { PanelComponent } from '../../ui/panel.component';
 import { ReachDiagramComponent } from '../../ui/reach-diagram.component';
 import { PlaybookPanelComponent } from '../../ui/playbook-panel.component';
+import { PlaybookFlowComponent } from '../../ui/playbook-flow.component';
 import { EmptyStateComponent } from '../../ui/empty-state.component';
 import { SkeletonComponent } from '../../ui/skeleton.component';
 import {
   parseVectorMetrics, reachDiagram, affectedWording, fixWording, countCleared, versionRecordedMessage,
   isPastDue, formatDueDate,
 } from '../../core/remediation';
+import { hasFlow } from '../../core/playbook-flow';
 import type { RemediationDetail } from '../../core/models';
 
 // The routed "/remediate/:itemId" guided page: one threat, walked through in four steps on a
@@ -22,7 +24,7 @@ import type { RemediationDetail } from '../../core/models';
   selector: 'tf-page-remediate-item',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, PanelComponent, ReachDiagramComponent, PlaybookPanelComponent, EmptyStateComponent, SkeletonComponent],
+  imports: [RouterLink, PanelComponent, ReachDiagramComponent, PlaybookPanelComponent, PlaybookFlowComponent, EmptyStateComponent, SkeletonComponent],
   template: `
     @if (loading()) {
       <tf-skeleton [rows]="10" />
@@ -110,7 +112,9 @@ import type { RemediationDetail } from '../../core/models';
         </tf-panel>
       }
 
-      @if (d.playbook) {
+      @if (hasFlow(d.item.category)) {
+        <tf-playbook-flow [playbook]="d.playbook" [itemId]="d.item.id" [category]="d.item.category" (toggled)="onStepToggled($event)" />
+      } @else if (d.playbook) {
         <tf-playbook-panel [playbook]="d.playbook" [itemId]="d.item.id" (toggled)="onStepToggled($event)" />
       }
 
@@ -279,6 +283,7 @@ export class RemediationGuidedComponent {
 
   isPastDue = isPastDue;
   formatDueDate = formatDueDate;
+  hasFlow = hasFlow;
 
   verdict = computed(() => {
     const r = this.detail()?.remediation;
