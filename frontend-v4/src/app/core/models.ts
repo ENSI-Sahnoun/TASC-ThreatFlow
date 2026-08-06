@@ -239,7 +239,7 @@ export interface DomainOption { slug: string; label: string; count: number; }
 // The "Possible Threat" verdict. `tier` is decided by the deterministic scorer; `matches` are
 // the reasons it used, and are what the explanation sentence is built from.
 export interface RelevanceMatch {
-  kind: 'product' | 'vendor' | 'domain' | 'kev' | 'sector' | 'severity';
+  kind: 'product' | 'vendor' | 'domain' | 'kev' | 'sector' | 'severity' | 'clicked';
   value: string;
 }
 
@@ -386,6 +386,25 @@ export interface RemediationQueueGroup {
   version: string | null;
   versionState: VersionState;
   items: RemediationQueueItem[];
+}
+
+// GET /api/profiles/:id/remediation/categories's own, deliberately minimal shape — a
+// category-playbook item (phishing today) has no CPE-matched asset, no affected-version range,
+// no fix target, so it carries none of RemediationQueueItem's CVE-only fields rather than
+// faking them.
+export interface CategoryQueueItem {
+  itemId: number;
+  title: string;
+  category: string;
+  tier: 'act_now' | 'watch';
+  score: number;
+  playbookDone: number;
+  playbookTotal: number;
+}
+
+export interface CategoryQueueGroup {
+  category: string;
+  items: CategoryQueueItem[];
 }
 
 // The `item` row from GET /api/items/:id/remediation — a raw `items` table SELECT *, narrower

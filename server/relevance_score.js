@@ -103,12 +103,18 @@ function scoreRelevance(profile, item, now = new Date()) {
 
   const sectorMatch = !!(item.industry && profile.sector && item.industry === profile.sector);
 
+  // A self-report from the Check URL page ("I clicked this") — real, first-person evidence, not
+  // an inference. Checked here (against the profile's own clicked-item set) rather than as a
+  // per-item column, so nothing in `item` itself has to know which profiles clicked it.
+  const clicked = !!(profile.clickedItemIds && profile.clickedItemIds.has(item.id));
+
   for (const c of assetHits) matches.push({ kind: 'product', value: `${c.vendor} ${c.product}` });
   for (const c of legacyHits) matches.push({ kind: 'vendor', value: c.vendor });
   for (const d of domainHits) matches.push({ kind: 'domain', value: d });
   if (kev) matches.push({ kind: 'kev', value: 'CISA KEV' });
   if (sectorMatch) matches.push({ kind: 'sector', value: item.industry });
   if (severity && rank(severity) >= 0) matches.push({ kind: 'severity', value: severity });
+  if (clicked) matches.push({ kind: 'clicked', value: 'reported click' });
 
   const floor = profile.severity_floor || 'medium';
   const atLeastHigh = meetsFloor(severity, 'high');
@@ -121,7 +127,13 @@ function scoreRelevance(profile, item, now = new Date()) {
   // unanswered exposure still reaches act_now on a KEV item: only a positive "this is internal"
   // demotes it, and withholding urgency on an actively-exploited flaw because a survey question
   // was skipped would fail in the wrong direction.
-  if (assetHit && exposure !== 'internal' && kev && recent) tier = 'act_now';
+  //
+  // A confirmed click outranks everything else unconditionally — it needs no asset match, no
+  // severity floor, nothing else to line up. Checked first for the same reason KEV+asset does
+  // not wait on severity: this is first-person evidence the reader already engaged with the
+  // threat, which is at least as strong a signal as "this CVE is being exploited somewhere".
+  if (clicked) tier = 'act_now';
+  else if (assetHit && exposure !== 'internal' && kev && recent) tier = 'act_now';
   else if (assetHit && (kev || atLeastHigh) && recent) tier = 'watch';
   else if (assetHit) tier = 'watch';
   else if (domainMatch && atFloor && recent) tier = 'watch';
@@ -132,6 +144,7 @@ function scoreRelevance(profile, item, now = new Date()) {
   // Tiebreak only, never rendered. Weights are deliberately coarse — this orders a list, it does
   // not quantify risk.
   let score = 0;
+  score += clicked ? 10 : 0;
   score += assetHits.length ? 5 : 0;
   score += legacyHits.length ? 3 : 0;
   score += kev ? 4 : 0;

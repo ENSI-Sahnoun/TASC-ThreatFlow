@@ -180,6 +180,37 @@ function createApp(store) {
     res.status(202).json(result);
   }));
 
+  // Self-report from the Check URL page: "I clicked this." Recomputes synchronously (unlike the
+  // background profile-edit path above) because the reader is on the page waiting to be told
+  // where the playbook is — a full corpus recompute is well under a second, so there's nothing
+  // to gain by backgrounding it here.
+  app.post('/api/profiles/:id/clicks/:itemId', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const itemId = parseId(req.params.itemId);
+    if (!id || !itemId) return res.status(404).json({ error: 'not found' });
+    const profile = await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+    const item = await store.get('SELECT id FROM items WHERE id = $1', [itemId]);
+    if (!item) return res.status(404).json({ error: 'not found' });
+    await store.run(
+      'INSERT INTO profile_reported_clicks (profile_id, item_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+      [id, itemId]);
+    res.status(200).json(await recomputeProfile(store, id));
+  }));
+
+  // Undoes a click report — same posture as declining a version answer: the reader is never
+  // trapped in a claim they can't retract.
+  app.delete('/api/profiles/:id/clicks/:itemId', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const itemId = parseId(req.params.itemId);
+    if (!id || !itemId) return res.status(404).json({ error: 'not found' });
+    const profile = await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+    await store.run(
+      'DELETE FROM profile_reported_clicks WHERE profile_id = $1 AND item_id = $2', [id, itemId]);
+    res.status(200).json(await recomputeProfile(store, id));
+  }));
+
   // Mirrors /relevance/prose: needs Ollama, runs in the background, its failure never looks
   // like a scoring failure. Rewords item_playbooks.steps[].detail only.
   app.post('/api/profiles/:id/playbooks/word', h(async (req, res) => {
@@ -253,6 +284,60 @@ function createApp(store) {
         kevRansomware: !!r.kevRansomware,
         sourceCount: r.sourceCount ?? 0,
         ...rem,
+      });
+    }
+    res.json([...groups.values()]);
+  }));
+
+  // Category-playbook items (phishing today) have no CPEs, so they can never join through
+  // profile_assets the way the route above requires — this is their own dashboard path, grouped
+  // by category rather than vendor/product.
+  //
+  // A playbook's steps come from the CVE builder (server/playbook.js) whenever the item carries
+  // a CVE or CVSS vector at all — regardless of the item's OWN `category` column. A 'news' or
+  // 'malware' item reporting on a specific CVE still gets the CVE-shaped playbook, not the
+  // category one, so filtering on `category <> 'cve'` alone is not enough (verified against real
+  // data: news/malware/advisory items about a CVE leaked into this route under their own
+  // category). The real discriminator is the step keys themselves: server/playbooks/*.js's
+  // builders namespace every key (`phishing:confirm`), the CVE builder never does (`confirm`,
+  // `patch`) — the same fact core/playbook.ts's groundingFooter() already relies on to tell the
+  // two apart client-side.
+  app.get('/api/profiles/:id/remediation/categories', h(async (req, res) => {
+    const id = parseId(req.params.id);
+    const profile = id && await profiles.getProfile(store, id);
+    if (!profile) return res.status(404).json({ error: 'not found' });
+
+    const rows = await store.all(`
+      SELECT i.id AS "itemId", i.title, i.category, ir.tier, ir.score, ip.steps,
+             COALESCE(ds.done_keys, '{}') AS "doneKeys"
+        FROM item_relevance ir
+        JOIN items i ON i.id = ir.item_id
+        JOIN item_playbooks ip ON ip.item_id = i.id AND ip.profile_id = ir.profile_id
+                               AND ip.profile_version = ir.profile_version
+        LEFT JOIN LATERAL (
+          SELECT array_agg(step_key) AS done_keys FROM playbook_step_state
+           WHERE item_id = i.id AND profile_id = ir.profile_id
+        ) ds ON true
+       WHERE ir.profile_id = $1 AND ir.profile_version = $2 AND ir.tier IN ('act_now','watch')
+         AND jsonb_array_length(ip.steps) > 0
+         AND (ip.steps->0->>'key') LIKE '%:%'
+         AND NOT EXISTS (
+           SELECT 1 FROM item_cpes c JOIN profile_assets pa
+             ON pa.vendor = c.vendor AND pa.product = c.product
+            WHERE c.item_id = i.id AND pa.profile_id = ir.profile_id
+         )
+       ORDER BY i.category, ir.score DESC
+    `, [profile.id, profile.profile_version]);
+
+    const groups = new Map();
+    for (const r of rows) {
+      if (!groups.has(r.category)) groups.set(r.category, { category: r.category, items: [] });
+      const steps = r.steps || [];
+      const stepKeys = new Set(steps.map((s) => s.key));
+      const playbookDone = (r.doneKeys || []).filter((k) => stepKeys.has(k)).length;
+      groups.get(r.category).items.push({
+        itemId: r.itemId, title: r.title, category: r.category, tier: r.tier, score: r.score,
+        playbookDone, playbookTotal: steps.length,
       });
     }
     res.json([...groups.values()]);

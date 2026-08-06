@@ -31,7 +31,7 @@ import type { Playbook } from '../core/models';
                 [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" marker-end="url(#flow-arrow)"
               />
               @if (e.label) {
-                <text class="edge-label" [attr.x]="e.x2 + 6" [attr.y]="e.y1 - 4">{{ e.label }}</text>
+                <text class="edge-label" [attr.x]="e.labelX" [attr.y]="e.labelY">{{ e.label }}</text>
               }
             }
 
@@ -45,8 +45,15 @@ import type { Playbook } from '../core/models';
                 }
                 @case ('end') {
                   <g [attr.transform]="'translate(' + p.x + ',' + p.y + ')'">
-                    <rect width="160" height="30" rx="15" class="pill" />
-                    <text x="80" y="19" class="pill-label">{{ p.node.label }}</text>
+                    <foreignObject width="160" height="30">
+                      <button
+                        type="button" class="done-btn" xmlns="http://www.w3.org/1999/xhtml"
+                        [class.done]="allDone()" [disabled]="allDone() || closing()"
+                        (click)="markDone()"
+                      >
+                        {{ closing() ? 'Closing…' : allDone() ? p.node.label : 'Mark done' }}
+                      </button>
+                    </foreignObject>
                   </g>
                 }
                 @case ('decision') {
@@ -92,6 +99,15 @@ import type { Playbook } from '../core/models';
     svg { display: block; margin: 0 auto; }
     .pill { fill: var(--surface-2); stroke: var(--accent); stroke-width: 1.5; }
     .pill-label { font-size: 10.5px; fill: var(--ink); text-anchor: middle; dominant-baseline: middle; }
+    .done-btn {
+      appearance: none; cursor: pointer; font: inherit; font-size: 10.5px; font-weight: 590;
+      width: 160px; height: 30px; border-radius: 15px; text-align: center;
+      color: var(--bg); background: var(--accent); border: 1.5px solid var(--accent);
+      transition: opacity var(--dur-fast) var(--ease-out);
+    }
+    .done-btn:hover:not(:disabled) { opacity: .9; }
+    .done-btn:disabled { cursor: default; }
+    .done-btn.done { color: var(--ink); background: var(--surface-2); opacity: 1; }
     .diamond { fill: var(--accent); }
     .diamond-label {
       margin: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
@@ -151,6 +167,12 @@ export class PlaybookFlowComponent {
   progress = computed(() => playbookProgress(this.effectivePlaybook()));
   footer = computed(() => groundingFooter(this._playbook()));
 
+  allDone = computed(() => {
+    const { done, total } = this.progress();
+    return total > 0 && done >= total;
+  });
+  closing = signal(false);
+
   centerX = FLOW_CENTER_X;
 
   diamondPoints(width: number, height: number): string {
@@ -184,5 +206,30 @@ export class PlaybookFlowComponent {
 
     const call = nowDone ? this.api.untickPlaybookStep(this.itemId, key) : this.api.tickPlaybookStep(this.itemId, key);
     call.subscribe();
+  }
+
+  // Bulk-tick shortcut: ticks every remaining step at once, same loop
+  // remediation-guided.component.ts's autoTickAppliedSteps already runs for the CVE version-bump
+  // flow. "Closed" on the Remediate dashboard is simply "every step ticked" — no separate flag.
+  markDone(): void {
+    if (this.allDone() || this.closing()) return;
+    const pb = this.effectivePlaybook();
+    if (!pb) return;
+    const doneKeys = new Set(pb.done);
+    const remaining = pb.steps.map((s) => s.key).filter((k) => !doneKeys.has(k));
+    if (!remaining.length) return;
+
+    this.closing.set(true);
+    const opt = this.optimistic();
+    const added = new Set(opt.added);
+    for (const k of remaining) added.add(k);
+    this.optimistic.set({ added, removed: opt.removed });
+
+    let pending = remaining.length;
+    const settle = () => { pending -= 1; if (pending === 0) this.closing.set(false); };
+    for (const k of remaining) {
+      this.toggled.emit({ key: k, done: true });
+      this.api.tickPlaybookStep(this.itemId, k).subscribe({ next: settle, error: settle });
+    }
   }
 }

@@ -6,7 +6,7 @@ import type {
   DashboardStats, FeedRow, Source, SourceStats, Item, ItemDetail,
   CveIntel, CveDetail, EntityProfile, SearchResults, Facets, ClusterMember, IocRow, IocCheckResult,
   PreviewCheck, Profile, ProfilePayload, Sector, CpeFacet, DomainOption, RelatedStory,
-  ProfileAsset, VersionState, RemediationQueueGroup, RemediationDetail,
+  ProfileAsset, VersionState, RemediationQueueGroup, CategoryQueueGroup, RemediationDetail,
 } from './models';
 
 // One method per endpoint and nothing else. No caching, no state — stores own that.
@@ -103,6 +103,17 @@ export class ApiService {
     return this.http.get<IocCheckResult>('/api/ioc-check', { params: new HttpParams().set('url', url) });
   }
 
+  // Self-report from the Check URL page — "I clicked this." Escalates the item to act_now for
+  // the active profile (server recomputes relevance synchronously before responding), the same
+  // way tickPlaybookStep's POST/DELETE pair works.
+  reportClick(profileId: number, itemId: number): Observable<unknown> {
+    return this.http.post(`/api/profiles/${profileId}/clicks/${itemId}`, {});
+  }
+
+  undoClick(profileId: number, itemId: number): Observable<unknown> {
+    return this.http.delete(`/api/profiles/${profileId}/clicks/${itemId}`);
+  }
+
   // Asked before an article preview iframe is created — see the endpoint's comment in
   // server/index.js for why framing permission can only be determined server-side.
   previewCheck(url: string): Observable<PreviewCheck> {
@@ -182,6 +193,13 @@ export class ApiService {
   // sorted server-side (server/index.js) — nothing here re-derives that grouping.
   remediationQueue(profileId: number): Observable<RemediationQueueGroup[]> {
     return this.http.get<RemediationQueueGroup[]>(`/api/profiles/${profileId}/remediation`);
+  }
+
+  // Category-playbook items (phishing today) — no CPE-matched asset to group under, so they're
+  // a separate call and a separate, category-grouped shape rather than a reshaped version of
+  // remediationQueue()'s response.
+  categoryRemediationQueue(profileId: number): Observable<CategoryQueueGroup[]> {
+    return this.http.get<CategoryQueueGroup[]>(`/api/profiles/${profileId}/remediation/categories`);
   }
 
   // Per-item remediation detail for the guided page. X-Profile-Id travels via

@@ -2,8 +2,14 @@ import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/cor
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { ApiService } from '../core/api.service';
+import { ProfileService } from '../core/profile.service';
 import { formatDate } from '../core/format';
 import type { IocCheckResult } from '../core/models';
+
+// One of: no report yet, a request in flight (either direction), reported and confirmed, or the
+// request failed. Keyed per itemId in a Map rather than one flag, since a single URL can match
+// several items and each reports independently.
+type ClickState = 'idle' | 'busy' | 'reported' | 'error';
 
 // Standalone URL-reputation lookup: type a URL, get back every item across every category
 // (phishing, malware/C2, ...) whose IOCs contain an exact match. Used both as its own route
@@ -55,6 +61,28 @@ import type { IocCheckResult } from '../core/models';
                 <li class="match-row" [style.animation-delay.ms]="i * 40">
                   <a [routerLink]="['/intel', m.itemId]">{{ m.title || 'Untitled' }}</a>
                   <span class="meta">{{ m.category }} · {{ m.sourceName }} · {{ formatDate(m.publishedAt) }}</span>
+                  @if (activeProfileId(); as profileId) {
+                    @switch (clickState(m.itemId)) {
+                      @case ('reported') {
+                        <p class="click-confirm">
+                          Reported.
+                          <a [routerLink]="['/remediate', m.itemId]">See what to do &rarr;</a>
+                          <button type="button" class="undo-link" (click)="undoClick(profileId, m.itemId)">actually, I didn't</button>
+                        </p>
+                      }
+                      @default {
+                        <button
+                          type="button" class="click-btn" [disabled]="clickState(m.itemId) === 'busy'"
+                          (click)="reportClick(profileId, m.itemId)"
+                        >
+                          {{ clickState(m.itemId) === 'busy' ? 'Reporting…' : 'I clicked this' }}
+                        </button>
+                        @if (clickState(m.itemId) === 'error') {
+                          <span class="click-error">Couldn't report that — try again.</span>
+                        }
+                      }
+                    }
+                  }
                 </li>
               }
             </ul>
@@ -171,6 +199,23 @@ import type { IocCheckResult } from '../core/models';
     .matches a:hover { text-decoration: underline; }
     .matches .meta { font-size: var(--fs-xs); color: var(--ink-2); }
 
+    .click-btn {
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 590;
+      color: var(--sev-critical); background: none; border: 1px solid color-mix(in oklch, var(--sev-critical), transparent 60%);
+      border-radius: 999px; padding: 3px 10px; margin-top: 2px; width: fit-content;
+      transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+    }
+    .click-btn:not(:disabled):hover { background: color-mix(in oklch, var(--sev-critical) 12%, transparent); }
+    .click-btn:disabled { opacity: .6; cursor: default; }
+    .click-error { font-size: var(--fs-xs); color: var(--sev-critical); margin-left: 8px; }
+    .click-confirm { margin: 2px 0 0; font-size: var(--fs-xs); color: var(--ink-2); display: flex; gap: 8px; align-items: center; }
+    .click-confirm a { color: var(--sev-critical); font-weight: 590; }
+    .undo-link {
+      appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); color: var(--ink-3);
+      background: none; border: 0; padding: 0; text-decoration: underline;
+    }
+    .undo-link:hover { color: var(--ink-2); }
+
     @media (prefers-reduced-motion: reduce) {
       .alert, .match-row, .check-btn, .spinner { animation-duration: 1ms !important; transition-duration: 1ms !important; }
       .alert { transform: none; }
@@ -180,13 +225,50 @@ import type { IocCheckResult } from '../core/models';
 })
 export class UrlCheckComponent {
   private api = inject(ApiService);
+  private profileService = inject(ProfileService);
 
   url = '';
   loading = signal(false);
   error = signal(false);
   result = signal<IocCheckResult | null>(null);
 
+  // Per-itemId report state for the current result set only — reset on every new search, same
+  // as the rest of this page. A fresh search does not know whether a match was reported before;
+  // see the click-report design note on why that's a deliberate first-pass cut, not an oversight.
+  private clickStates = signal<Map<number, ClickState>>(new Map());
+
   formatDate = formatDate;
+
+  activeProfileId(): number | null {
+    return this.profileService.active()?.id ?? null;
+  }
+
+  clickState(itemId: number): ClickState {
+    return this.clickStates().get(itemId) ?? 'idle';
+  }
+
+  private setClickState(itemId: number, state: ClickState): void {
+    const next = new Map(this.clickStates());
+    next.set(itemId, state);
+    this.clickStates.set(next);
+  }
+
+  reportClick(profileId: number, itemId: number): void {
+    if (this.clickState(itemId) === 'busy') return;
+    this.setClickState(itemId, 'busy');
+    this.api.reportClick(profileId, itemId).subscribe({
+      next: () => this.setClickState(itemId, 'reported'),
+      error: () => this.setClickState(itemId, 'error'),
+    });
+  }
+
+  undoClick(profileId: number, itemId: number): void {
+    this.setClickState(itemId, 'busy');
+    this.api.undoClick(profileId, itemId).subscribe({
+      next: () => this.setClickState(itemId, 'idle'),
+      error: () => this.setClickState(itemId, 'error'),
+    });
+  }
 
   check(e: Event): void {
     e.preventDefault();
@@ -194,6 +276,7 @@ export class UrlCheckComponent {
     if (!url) return;
     this.loading.set(true);
     this.error.set(false);
+    this.clickStates.set(new Map());
     this.api.checkIoc(url).subscribe({
       next: (r) => {
         this.result.set(r);

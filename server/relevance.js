@@ -94,8 +94,15 @@ async function assembleItems(store) {
 }
 
 async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
-  const profile = await getProfile(store, profileId);
-  if (!profile) return null;
+  const rawProfile = await getProfile(store, profileId);
+  if (!rawProfile) return null;
+
+  // Loaded once per recompute, same "no per-item query" discipline as attackMitigations below.
+  // A shallow copy, not a write to the fetched row: scoreRelevance reads clickedItemIds off the
+  // same profile object it already receives everything else through.
+  const clickedRows = await store.all(
+    'SELECT item_id FROM profile_reported_clicks WHERE profile_id = $1', [profileId]);
+  const profile = { ...rawProfile, clickedItemIds: new Set(clickedRows.map((r) => r.item_id)) };
 
   const items = await assembleItems(store);
   // Loaded once per recompute call, not per item -- same reasoning as the rest of this file's

@@ -12,7 +12,7 @@ import {
   fixWording, actionSubtitle, filterQueueItems, actionProvenance, buildTicketText,
 } from '../../core/remediation';
 import type { RemediationAction, RiskReachMode } from '../../core/remediation';
-import type { RemediationQueueGroup, RemediationQueueItem } from '../../core/models';
+import type { RemediationQueueGroup, RemediationQueueItem, CategoryQueueGroup } from '../../core/models';
 import { CopyButtonComponent } from '../../ui/copy-button.component';
 
 // One rendered section of an asset's actions. Before a version is known there's exactly one,
@@ -52,7 +52,7 @@ const CVE_PAGE_SIZE = 8;
           reason="Add assets to your profile and this page fills itself in"
         />
         <a class="cta" routerLink="/onboarding">Go to profile setup &rarr;</a>
-      } @else if (groups().length === 0) {
+      } @else if (groups().length === 0 && categoryGroups().length === 0) {
         <tf-empty-state
           title="Nothing open"
           reason="Nothing open against the software you've told us about"
@@ -84,6 +84,7 @@ const CVE_PAGE_SIZE = 8;
           </div>
         </div>
 
+        @if (groups().length) {
         <ul class="groups">
           @for (g of groups(); track g.vendor + '/' + g.product) {
             <li class="group">
@@ -208,6 +209,31 @@ const CVE_PAGE_SIZE = 8;
             </li>
           }
         </ul>
+        }
+
+        @if (categoryGroups().length) {
+        <ul class="groups category-groups">
+          @for (cg of categoryGroups(); track cg.category) {
+            <li class="group">
+              <div class="group-head">
+                <span class="name">{{ categoryLabel(cg.category) }}</span>
+              </div>
+              <ul class="category-items">
+                @for (item of cg.items; track item.itemId) {
+                  <li class="category-item">
+                    <a [routerLink]="['/remediate', item.itemId]">{{ item.title || 'Untitled' }}</a>
+                    <span class="tier-badge" [class.act-now]="item.tier === 'act_now'">{{ item.tier === 'act_now' ? 'act now' : 'watch' }}</span>
+                    <span class="bar" role="progressbar" [attr.aria-valuenow]="item.playbookDone" [attr.aria-valuemax]="item.playbookTotal">
+                      <span class="fill" [style.width.%]="item.playbookTotal ? (item.playbookDone / item.playbookTotal) * 100 : 0"></span>
+                    </span>
+                    <span class="count">{{ item.playbookDone }} of {{ item.playbookTotal }}</span>
+                  </li>
+                }
+              </ul>
+            </li>
+          }
+        </ul>
+        }
       }
     </tf-panel>
   `,
@@ -235,6 +261,21 @@ const CVE_PAGE_SIZE = 8;
     .past-due { margin-left: auto; font-size: var(--fs-xs); font-weight: 600; color: var(--sev-critical); }
     .running { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--ink-2); }
     .closes { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--ink); }
+
+    .category-groups { margin-top: 20px; }
+    .category-items { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+    .category-item {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 8px 0; border-top: var(--hair) solid var(--hairline);
+    }
+    .category-item:first-child { border-top: none; padding-top: 0; }
+    .category-item a { color: var(--ink); font-size: var(--fs-sm); font-weight: 540; text-decoration: none; }
+    .category-item a:hover { text-decoration: underline; }
+    .tier-badge {
+      font-size: 10px; font-weight: 700; color: var(--ink-2); background: var(--surface-3);
+      padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em;
+    }
+    .tier-badge.act-now { color: var(--bg); background: var(--sev-critical); }
 
     .tabular-nums { font-variant-numeric: tabular-nums; }
 
@@ -357,11 +398,16 @@ export class RemediationQueueComponent {
   private profileService = inject(ProfileService);
 
   groups = signal<RemediationQueueGroup[]>([]);
+  categoryGroups = signal<CategoryQueueGroup[]>([]);
   loading = signal(true);
   error = signal(false);
 
-  noAssets = computed(() => (this.profileService.active()?.assets.length ?? 0) === 0);
-  summary = computed(() => queueSummary(this.groups()));
+  // The true empty state is "nothing open at all" — a profile with zero declared assets but a
+  // real open phishing item still has something to show, so no-assets alone can no longer hide
+  // the whole page.
+  noAssets = computed(() => (this.profileService.active()?.assets.length ?? 0) === 0
+    && this.categoryGroups().length === 0);
+  summary = computed(() => queueSummary(this.groups(), new Date(), this.categoryGroups()));
 
   formatDueDate = formatDueDate;
   severityBands = ['critical', 'high', 'medium', 'low', 'none', 'unknown'] as const;
@@ -399,10 +445,29 @@ export class RemediationQueueComponent {
     this.expandedCveKeys.set(new Set());
     this.savingKeys.set(new Set());
     this.saveErrors.set(new Map());
+
+    // Both requests must land before loading clears — a partial load reading as complete would
+    // hide a genuinely open category-playbook item behind a stale or empty section.
+    let assetRows: RemediationQueueGroup[] | null = null;
+    let categoryRows: CategoryQueueGroup[] | null = null;
+    const settle = () => {
+      if (assetRows === null || categoryRows === null) return;
+      this.groups.set(assetRows);
+      this.categoryGroups.set(categoryRows);
+      this.loading.set(false);
+    };
     this.api.remediationQueue(profile.id).subscribe({
-      next: (rows) => { this.groups.set(rows); this.loading.set(false); },
+      next: (rows) => { assetRows = rows; settle(); },
       error: () => { this.error.set(true); this.loading.set(false); },
     });
+    this.api.categoryRemediationQueue(profile.id).subscribe({
+      next: (rows) => { categoryRows = rows; settle(); },
+      error: () => { this.error.set(true); this.loading.set(false); },
+    });
+  }
+
+  categoryLabel(category: string): string {
+    return category.charAt(0).toUpperCase() + category.slice(1);
   }
 
   progressOf(g: RemediationQueueGroup) {

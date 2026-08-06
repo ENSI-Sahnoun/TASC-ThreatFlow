@@ -58,6 +58,13 @@ describe('matchSentence', () => {
     expect(s).toBe('Matches your stack (fortinet fortios).');
   });
 
+  // A self-reported click is the strongest reason the sentence can carry, so it leads even
+  // ahead of a product match — same ordering the scorer's own ladder already gives it.
+  it('leads with a reported click ahead of every other reason', () => {
+    expect(matchSentence([m('product', 'fortinet fortios'), m('clicked', 'reported click')]))
+      .toBe('You reported clicking this. Matches your stack (fortinet fortios).');
+  });
+
   it('joins multiple values readably', () => {
     expect(matchSentence([m('domain', 'ransomware'), m('domain', 'zero-day')]))
       .toBe('You follow ransomware and zero-day.');

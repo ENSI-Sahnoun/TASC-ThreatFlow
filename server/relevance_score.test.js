@@ -265,3 +265,30 @@ test('ladder v2: a profile with no assets key at all does not throw', () => {
   const profile = { vendors: [], products: [], threat_domains: [], sector: 'finance', severity_floor: 'medium' };
   assert.strictEqual(scoreRelevance(profile, item(), NOW).tier, 'not_yours');
 });
+
+// --- Clicked rung: a self-report from the Check URL page ---
+
+test('clicked: a reported click is act_now even with nothing else matching', () => {
+  const profile = { vendors: [], products: [], threat_domains: [], sector: 'finance', severity_floor: 'medium', clickedItemIds: new Set([42]) };
+  const r = scoreRelevance(profile, item({ id: 42 }), NOW);
+  assert.strictEqual(r.tier, 'act_now');
+  assert.ok(r.matches.some((m) => m.kind === 'clicked'));
+});
+
+test('clicked: an item not in the clicked set scores normally', () => {
+  const profile = { vendors: [], products: [], threat_domains: [], sector: 'finance', severity_floor: 'medium', clickedItemIds: new Set([42]) };
+  const r = scoreRelevance(profile, item({ id: 99 }), NOW);
+  assert.strictEqual(r.tier, 'not_yours');
+  assert.ok(!r.matches.some((m) => m.kind === 'clicked'));
+});
+
+test('clicked: a profile with no clickedItemIds at all does not throw', () => {
+  const profile = { vendors: [], products: [], threat_domains: [], sector: 'finance', severity_floor: 'medium' };
+  assert.strictEqual(scoreRelevance(profile, item({ id: 42 }), NOW).tier, 'not_yours');
+});
+
+test('clicked: outranks a stale, unsevere old item that would otherwise be not_yours', () => {
+  const profile = { vendors: [], products: [], threat_domains: [], sector: 'finance', severity_floor: 'medium', clickedItemIds: new Set([7]) };
+  const r = scoreRelevance(profile, item({ id: 7, publishedAt: OLD }), NOW);
+  assert.strictEqual(r.tier, 'act_now');
+});

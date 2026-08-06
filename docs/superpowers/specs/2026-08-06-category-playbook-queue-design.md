@@ -68,10 +68,20 @@ interface CategoryQueueGroup {
 Query: `item_relevance` (tier in act_now/watch) joined to `items` and `item_playbooks`/
 `playbook_step_state` for that profile/profile_version, **excluding** any item that also has a
 CPE match in `profile_assets` (so nothing double-counts between this endpoint and the existing
-one) and excluding any item whose category is `'cve'` (the CVE builder's own playbook stays on
-the existing dashboard path only). An item with no playbook at all (`item_playbooks` has no row —
-e.g. a `news`/`osint` item that happens to reach `watch` some day) is excluded here too: nothing
-to close out means nothing to show on a page whose whole point is trackable open items.
+one). An item with no playbook at all (`item_playbooks` has no row — e.g. a `news`/`osint` item
+that happens to reach `watch` some day) is excluded here too: nothing to close out means nothing
+to show on a page whose whole point is trackable open items.
+
+**Correction made during implementation, verified against real data:** the CVE builder
+(`server/playbook.js`) produces a playbook for any item carrying a CVE or CVSS vector at all,
+regardless of the item's own `category` column — a `news` or `malware` item reporting on a
+specific CVE still gets the CVE-shaped playbook, not a category one. Filtering on
+`category <> 'cve'` alone let those leak into this route under their own category (confirmed live
+against the dev database: real `news`/`malware`/`advisory` rows appeared here before the fix). The
+real discriminator is the step keys themselves — `server/playbooks/*.js`'s builders namespace
+every key (`phishing:confirm`), the CVE builder never does (`confirm`, `patch`) — the same fact
+`core/playbook.ts`'s `groundingFooter()` already relies on client-side. The query checks the first
+step's key for a `:` instead.
 
 ### Frontend types and API call
 

@@ -87,6 +87,11 @@ export interface FlowEdge {
   x2: number; y2: number;
   dashed: boolean;
   label: string | null;
+  // Precomputed rather than derived in the template — the label's own anchor point differs from
+  // the line's endpoints (a "yes" label centered on the vertical gap between a diamond's point
+  // and the box below it, not glued to either).
+  labelX: number;
+  labelY: number;
 }
 
 export interface FlowLayout {
@@ -103,12 +108,19 @@ function nodeSize(node: ResolvedFlowNode): { width: number; height: number } {
 }
 
 function solidEdge(a: PositionedFlowNode, b: PositionedFlowNode, label: string | null = null): FlowEdge {
+  const x1 = a.x + a.width / 2;
+  const y1 = a.y + a.height;
+  const x2 = b.x + b.width / 2;
+  const y2 = b.y;
   return {
     key: `${a.node.key}-${b.node.key}`,
-    x1: a.x + a.width / 2, y1: a.y + a.height,
-    x2: b.x + b.width / 2, y2: b.y,
+    x1, y1, x2, y2,
     dashed: false,
     label,
+    // Centered on the vertical gap itself (a's bottom to b's top), not glued to either endpoint
+    // — anchored at y1 the label sat right on top of a diamond's point, reading as clipped text.
+    labelX: x2 + 6,
+    labelY: y1 + (y2 - y1) / 2 + 3,
   };
 }
 
@@ -121,9 +133,15 @@ function railEdges(decision: PositionedFlowNode, after: PositionedFlowNode): Flo
   const mergeY = after.y;
   const base = decision.node.key;
   return [
-    { key: `${base}-rail-out`, x1: decision.x + decision.width, y1: midY, x2: railX, y2: midY, dashed: true, label: 'no' },
-    { key: `${base}-rail-down`, x1: railX, y1: midY, x2: railX, y2: mergeY, dashed: true, label: null },
-    { key: `${base}-rail-in`, x1: railX, y1: mergeY, x2: after.x + after.width / 2, y2: mergeY, dashed: true, label: null },
+    {
+      key: `${base}-rail-out`, x1: decision.x + decision.width, y1: midY, x2: railX, y2: midY,
+      dashed: true, label: 'no', labelX: railX + 6, labelY: midY - 4,
+    },
+    { key: `${base}-rail-down`, x1: railX, y1: midY, x2: railX, y2: mergeY, dashed: true, label: null, labelX: 0, labelY: 0 },
+    {
+      key: `${base}-rail-in`, x1: railX, y1: mergeY, x2: after.x + after.width / 2, y2: mergeY,
+      dashed: true, label: null, labelX: 0, labelY: 0,
+    },
   ];
 }
 

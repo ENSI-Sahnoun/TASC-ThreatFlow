@@ -1,4 +1,4 @@
-import type { RemediationFix, RemediationQueueGroup, RemediationQueueItem } from './models';
+import type { RemediationFix, RemediationQueueGroup, RemediationQueueItem, CategoryQueueGroup } from './models';
 
 // Presentation and derived math over Spec A's remediation routes. Pure, no HTTP, no DOM — this
 // app runs vitest in a node environment with no TestBed by design, so every rule the remediation
@@ -40,7 +40,13 @@ export interface QueueSummary {
 // this asset, not a live threat, even though the row still renders (Spec A's tier scoring does
 // not factor in version status — see CLAUDE.md's relevance_score.js note — so the item stays in
 // the query result; this is where "open" is actually decided for the UI).
-export function queueSummary(groups: RemediationQueueGroup[], now: Date = new Date()): QueueSummary {
+// categoryGroups defaults to [] so every existing call site (and every existing test) keeps
+// working unchanged. Every item in a category group is open by construction — the endpoint only
+// ever returns act_now/watch items with a live playbook — and none carries a due date today
+// (only KEV does), so they never contribute to pastDue.
+export function queueSummary(
+  groups: RemediationQueueGroup[], now: Date = new Date(), categoryGroups: CategoryQueueGroup[] = [],
+): QueueSummary {
   let open = 0;
   let pastDue = 0;
   for (const g of groups) {
@@ -50,6 +56,7 @@ export function queueSummary(groups: RemediationQueueGroup[], now: Date = new Da
       if (isPastDue(item.dueDate, now)) pastDue += 1;
     }
   }
+  for (const g of categoryGroups) open += g.items.length;
   return { open, pastDue };
 }
 

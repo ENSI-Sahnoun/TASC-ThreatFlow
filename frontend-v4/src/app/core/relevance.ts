@@ -55,6 +55,10 @@ export function matchSentence(matches: RelevanceMatch[] | null | undefined): str
   const pick = (kind: string) => matches.filter((m) => m.kind === kind).map((m) => m.value);
   const parts: string[] = [];
 
+  // Checked first: a self-reported click is the strongest reason this can carry, and leads the
+  // sentence the same way the scorer's own ladder puts it ahead of every other rung.
+  if (pick('clicked').length) parts.push('You reported clicking this.');
+
   const products = pick('product');
   const vendors = pick('vendor');
   if (products.length) parts.push(`Matches your stack (${joinList(products)}).`);

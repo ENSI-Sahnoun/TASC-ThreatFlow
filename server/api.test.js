@@ -438,6 +438,61 @@ test('POST /api/profiles/:id/relevance/recompute returns 202 and 404 for unknown
   } finally { await cleanup(); }
 });
 
+test('POST /api/profiles/:id/clicks/:itemId escalates the item to act_now for that profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(p.body.id) };
+
+    const before = await send(app, 'GET', '/api/items', null, hdr);
+    assert.strictEqual(before.body.find((r) => r.id === missId).relevance.tier, 'not_yours');
+
+    const click = await send(app, 'POST', `/api/profiles/${p.body.id}/clicks/${missId}`);
+    assert.strictEqual(click.status, 200);
+    // 2, not 1: the fixture's "hit" item already reaches act_now on its own (fortios + KEV) —
+    // this asserts the click added a second one, not that it's the only one.
+    assert.strictEqual(click.body.tiers.act_now, 2);
+
+    const after = await send(app, 'GET', '/api/items', null, hdr);
+    const row = after.body.find((r) => r.id === missId);
+    assert.strictEqual(row.relevance.tier, 'act_now');
+    assert.ok(row.relevance.matches.some((m) => m.kind === 'clicked'));
+  } finally { await cleanup(); }
+});
+
+test('DELETE /api/profiles/:id/clicks/:itemId undoes the click and the item re-scores normally', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+    const hdr = { 'X-Profile-Id': String(p.body.id) };
+
+    await send(app, 'POST', `/api/profiles/${p.body.id}/clicks/${missId}`);
+    const undo = await send(app, 'DELETE', `/api/profiles/${p.body.id}/clicks/${missId}`);
+    assert.strictEqual(undo.status, 200);
+
+    const after = await send(app, 'GET', '/api/items', null, hdr);
+    assert.strictEqual(after.body.find((r) => r.id === missId).relevance.tier, 'not_yours');
+  } finally { await cleanup(); }
+});
+
+test('POST/DELETE /api/profiles/:id/clicks/:itemId return 404 for an unknown profile or item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const { missId } = await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    assert.strictEqual((await send(app, 'POST', `/api/profiles/999/clicks/${missId}`)).status, 404);
+    assert.strictEqual((await send(app, 'POST', `/api/profiles/${p.body.id}/clicks/999999`)).status, 404);
+    assert.strictEqual((await send(app, 'DELETE', `/api/profiles/999/clicks/${missId}`)).status, 404);
+  } finally { await cleanup(); }
+});
+
 test('GET /api/items includes a model-written sentence when one exists', async () => {
   const { store, cleanup } = await makeTempDb();
   try {
@@ -1530,6 +1585,145 @@ test('GET /api/profiles/:id/remediation surfaces patchUrl alongside fix, even wh
     const item = res.body[0].items.find((i) => i.itemId === hitId);
     assert.strictEqual(item.fix.kind, 'version');
     assert.strictEqual(item.patchUrl, 'https://example.com/patch');
+  } finally { await cleanup(); }
+});
+
+async function seedPhishingItem(store, { withCpe = false } = {}) {
+  const src = await store.get(
+    "INSERT INTO sources (name, fetch_kind, active) VALUES ('PH','json_api',true) RETURNING id");
+  const item = await store.get(
+    `INSERT INTO items (source_id, category, title, external_id, published_at)
+     VALUES ($1,'phishing','Phishing page','PH-1', now()) RETURNING id`, [src.id]);
+  if (withCpe) {
+    await store.run(
+      "INSERT INTO item_cpes (item_id, part, vendor, product) VALUES ($1,'a','fortinet','fortios')", [item.id]);
+  }
+  return item.id;
+}
+
+const PLAYBOOK_STEPS = JSON.stringify([
+  { key: 'phishing:confirm', title: 'Check whether anyone was targeted', detail: 'd', source: 's', link: null },
+  { key: 'phishing:check-clicked', title: 'Check whether anyone clicked', detail: 'd', source: 's', link: null },
+]);
+
+test('GET /api/profiles/:id/remediation/categories groups a phishing item by category', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPhishingItem(store);
+    const p = await send(app, 'POST', '/api/profiles', { name: 'p', sector: 'finance', threatDomains: [], severityFloor: 'medium' });
+    const pid = p.body.id;
+    await store.run(
+      "INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches, consequence) VALUES ($1,$2,$3,'act_now',10,'[]'::jsonb,'{}'::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET tier=EXCLUDED.tier, score=EXCLUDED.score",
+      [pid, itemId, p.body.profile_version]);
+    await store.run(
+      'INSERT INTO item_playbooks (profile_id, item_id, profile_version, steps) VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET steps=EXCLUDED.steps',
+      [pid, itemId, p.body.profile_version, PLAYBOOK_STEPS]);
+
+    const res = await get(app, `/api/profiles/${pid}/remediation/categories`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.length, 1);
+    assert.strictEqual(res.body[0].category, 'phishing');
+    assert.strictEqual(res.body[0].items.length, 1);
+    const item = res.body[0].items[0];
+    assert.strictEqual(item.itemId, itemId);
+    assert.strictEqual(item.tier, 'act_now');
+    assert.strictEqual(item.playbookTotal, 2);
+    assert.strictEqual(item.playbookDone, 0);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation/categories only counts done[] entries that are still real steps', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPhishingItem(store);
+    const p = await send(app, 'POST', '/api/profiles', { name: 'p', sector: 'finance', threatDomains: [], severityFloor: 'medium' });
+    const pid = p.body.id;
+    await store.run(
+      "INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches, consequence) VALUES ($1,$2,$3,'act_now',10,'[]'::jsonb,'{}'::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET tier=EXCLUDED.tier, score=EXCLUDED.score",
+      [pid, itemId, p.body.profile_version]);
+    await store.run(
+      'INSERT INTO item_playbooks (profile_id, item_id, profile_version, steps) VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET steps=EXCLUDED.steps',
+      [pid, itemId, p.body.profile_version, PLAYBOOK_STEPS]);
+    await store.run('INSERT INTO playbook_step_state (profile_id, item_id, step_key) VALUES ($1,$2,$3)',
+      [pid, itemId, 'phishing:confirm']);
+    // A stale key from a superseded playbook must not inflate the count.
+    await store.run('INSERT INTO playbook_step_state (profile_id, item_id, step_key) VALUES ($1,$2,$3)',
+      [pid, itemId, 'phishing:ghost']);
+
+    const res = await get(app, `/api/profiles/${pid}/remediation/categories`);
+    assert.strictEqual(res.body[0].items[0].playbookDone, 1);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation/categories excludes an item that also has a real CPE/asset match', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const itemId = await seedPhishingItem(store, { withCpe: true });
+    const p = await send(app, 'POST', '/api/profiles', {
+      name: 'p', sector: 'finance', threatDomains: [], severityFloor: 'medium',
+      assets: [{ vendor: 'fortinet', product: 'fortios', exposure: 'unknown' }],
+    });
+    const pid = p.body.id;
+    await store.run(
+      "INSERT INTO item_relevance (profile_id, item_id, profile_version, tier, score, matches, consequence) VALUES ($1,$2,$3,'act_now',10,'[]'::jsonb,'{}'::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET tier=EXCLUDED.tier, score=EXCLUDED.score",
+      [pid, itemId, p.body.profile_version]);
+    await store.run(
+      'INSERT INTO item_playbooks (profile_id, item_id, profile_version, steps) VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (profile_id, item_id, profile_version) DO UPDATE SET steps=EXCLUDED.steps',
+      [pid, itemId, p.body.profile_version, PLAYBOOK_STEPS]);
+
+    const res = await get(app, `/api/profiles/${pid}/remediation/categories`);
+    assert.strictEqual(res.body.length, 0);
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation/categories excludes cve-category items even with a playbook', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    await seedRelevanceFixture(store);
+    const p = await send(app, 'POST', '/api/profiles', REL_PROFILE);
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await get(app, `/api/profiles/${p.body.id}/remediation/categories`);
+    assert.strictEqual(res.body.length, 0, 'the CVE item belongs on the asset-grouped route only');
+  } finally { await cleanup(); }
+});
+
+// Regression: verified against real dev data that a non-CVE-category item reporting on a CVE
+// (news/malware/advisory items about a specific vulnerability) still gets the CVE builder's
+// playbook, not a category one — category alone was not a safe filter.
+test('GET /api/profiles/:id/remediation/categories excludes a news item whose playbook came from the CVE builder', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const src = await store.get("INSERT INTO sources (name, fetch_kind, active) VALUES ('N','rss',true) RETURNING id");
+    // industry matches the profile's sector below so the item reaches 'watch' (sectorMatch &&
+    // recent) without needing an asset/CPE match — real evidence the CVE builder's playbook
+    // actually materializes here, not a vacuous pass from the item never reaching a playbook
+    // tier at all.
+    const item = await store.get(
+      `INSERT INTO items (source_id, category, title, external_id, cvss_vector, industry, published_at)
+       VALUES ($1,'news','CISA flags a CVE','N-1','CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H','finance', now())
+       RETURNING id`, [src.id]);
+    await store.run("INSERT INTO item_cves (item_id, cve_id) VALUES ($1,'CVE-2026-99')", [item.id]);
+    await store.run("INSERT INTO cve_intel (cve_id, severity, kev_listed) VALUES ('CVE-2026-99','critical',true)");
+    const p = await send(app, 'POST', '/api/profiles', { name: 'p', sector: 'finance', threatDomains: [], severityFloor: 'medium' });
+    await send(app, 'POST', `/api/profiles/${p.body.id}/relevance/recompute`);
+
+    const res = await get(app, `/api/profiles/${p.body.id}/remediation/categories`);
+    assert.strictEqual(res.body.length, 0, 'a CVE-shaped playbook must never surface here, regardless of the item\'s own category');
+  } finally { await cleanup(); }
+});
+
+test('GET /api/profiles/:id/remediation/categories returns 404 for an unknown profile', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const app = createApp(store);
+    const res = await get(app, '/api/profiles/999/remediation/categories');
+    assert.strictEqual(res.status, 404);
   } finally { await cleanup(); }
 });
 

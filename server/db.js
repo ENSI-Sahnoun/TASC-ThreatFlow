@@ -138,6 +138,16 @@ async function applySchema(s = store) {
     ALTER TABLE profile_assets ADD COLUMN IF NOT EXISTS version_state TEXT NOT NULL DEFAULT 'unset'
       CHECK (version_state IN ('unset','known','unknown'));
 
+    -- A self-report ("I clicked this") from the Check URL page. Undoable by design (DELETE the
+    -- row) — same posture as every other signal in this app: relevance is fully re-derived from
+    -- current facts on every recompute, never a one-way ratchet.
+    CREATE TABLE IF NOT EXISTS profile_reported_clicks (
+      profile_id  INT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      item_id     INT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (profile_id, item_id)
+    );
+
     -- Materialized because sorting 24k rows by tier has to happen in SQL — a page cannot be
     -- sorted by a value that has not been computed. Keyed by profile_version so a profile edit
     -- invalidates verdicts; superseded versions are left orphaned rather than deleted, so

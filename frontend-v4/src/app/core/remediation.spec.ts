@@ -83,6 +83,14 @@ describe('queueSummary', () => {
   it('is all zero for an empty queue', () => {
     expect(queueSummary([], now)).toEqual({ open: 0, pastDue: 0 });
   });
+
+  it('folds category-playbook items into open, never into pastDue', () => {
+    const categoryGroups = [{ category: 'phishing', items: [
+      { itemId: 1, title: 't', category: 'phishing', tier: 'act_now' as const, score: 10, playbookDone: 0, playbookTotal: 4 },
+      { itemId: 2, title: 't2', category: 'phishing', tier: 'watch' as const, score: 5, playbookDone: 4, playbookTotal: 4 },
+    ] }];
+    expect(queueSummary([], now, categoryGroups)).toEqual({ open: 2, pastDue: 0 });
+  });
 });
 
 describe('groupProgress', () => {
