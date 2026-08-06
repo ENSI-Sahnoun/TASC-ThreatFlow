@@ -219,6 +219,24 @@ async function applySchema(s = store) {
       PRIMARY KEY (profile_id, item_id, step_key)
     );
 
+    -- MITRE's own STIX data, matched and ranked by server/backfill-attack.js. Replaces the old
+    -- hand-typed data/attack-mitigations.json entirely -- a newly-named group now gets real
+    -- coverage instead of waiting for a manual edit. subject_type disambiguates a name that
+    -- appears in both data/threat-actors.json and data/malware-families.json (e.g. LockBit is
+    -- both an actor and, separately, ransomware tooling) -- same name, potentially different
+    -- STIX object, potentially different technique set. DELETE + reinsert on every backfill
+    -- run, same rebuild-not-merge posture as rebuildClusters().
+    CREATE TABLE IF NOT EXISTS attack_mitigations (
+      subject_type    TEXT NOT NULL,
+      subject_name    TEXT NOT NULL,
+      mitigation_id   TEXT NOT NULL,
+      mitigation_name TEXT NOT NULL,
+      mitigation_url  TEXT NOT NULL,
+      technique_count INT NOT NULL,
+      synced_at       TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (subject_type, subject_name, mitigation_id)
+    );
+
     CREATE TABLE IF NOT EXISTS ip_intel (
       ip TEXT PRIMARY KEY,
       ports_json TEXT,

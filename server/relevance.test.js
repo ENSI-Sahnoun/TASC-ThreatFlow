@@ -96,6 +96,9 @@ test('recomputeProfile materializes a category playbook for a watch-tier item wi
        VALUES ($1,'ransomware','Acme Corp (LockBit)','R-2','medium', now() - interval '1 days') RETURNING id`, [src.id]);
     await store.run("INSERT INTO item_domains (item_id, domain) VALUES ($1,'ransomware')", [item.id]);
     await store.run("INSERT INTO item_actors (item_id, actor) VALUES ($1,'LockBit')", [item.id]);
+    await store.run(
+      `INSERT INTO attack_mitigations (subject_type, subject_name, mitigation_id, mitigation_name, mitigation_url, technique_count, synced_at)
+       VALUES ('actor','LockBit','M1053','Data Backup','https://attack.mitre.org/mitigations/M1053/',7, now())`);
 
     const profile = await createProfile(store, {
       name: 'RansomProfile', sector: 'finance', vendors: [], products: [],
@@ -444,5 +447,47 @@ test('the confirm step states the affected version range when cve_intel carries 
       [i.id, p.id, p.profile_version]);
     const confirm = row.steps.find((st) => st.key === 'confirm');
     assert.match(confirm.detail, /before 7\.4\.5/);
+  } finally { await cleanup(); }
+});
+
+test('recomputeProfile loads attack_mitigations once per call, not once per item', async () => {
+  const { store, cleanup } = await makeTempDb();
+  try {
+    const src = await store.get(
+      "INSERT INTO sources (name, fetch_kind, active) VALUES ('S5','json_api',true) RETURNING id");
+    for (let i = 0; i < 3; i += 1) {
+      const item = await store.get(
+        `INSERT INTO items (source_id, category, title, external_id, severity, published_at)
+         VALUES ($1,'ransomware','Victim ${i} (LockBit)','R-${i}','medium', now() - interval '1 days') RETURNING id`,
+        [src.id]);
+      await store.run("INSERT INTO item_domains (item_id, domain) VALUES ($1,'ransomware')", [item.id]);
+      await store.run("INSERT INTO item_actors (item_id, actor) VALUES ($1,'LockBit')", [item.id]);
+    }
+    await store.run(
+      `INSERT INTO attack_mitigations (subject_type, subject_name, mitigation_id, mitigation_name, mitigation_url, technique_count, synced_at)
+       VALUES ('actor','LockBit','M1053','Data Backup','https://attack.mitre.org/mitigations/M1053/',7, now())`);
+
+    const profile = await createProfile(store, {
+      name: 'AttackMitProfile', sector: 'finance', vendors: [], products: [],
+      threatDomains: ['ransomware'], severityFloor: 'medium', assets: [],
+    });
+
+    let attackMitigationsQueryCount = 0;
+    const countingStore = {
+      ...store,
+      all: (sql, params) => {
+        if (sql.includes('FROM attack_mitigations')) attackMitigationsQueryCount += 1;
+        return store.all(sql, params);
+      },
+    };
+
+    await recomputeProfile(countingStore, profile.id);
+    assert.strictEqual(attackMitigationsQueryCount, 1,
+      'attack_mitigations must be loaded once per recompute call, not once per item');
+
+    const rows = await store.all(
+      'SELECT steps FROM item_playbooks WHERE profile_id = $1 ORDER BY item_id', [profile.id]);
+    assert.ok(rows.length > 0);
+    for (const row2 of rows) assert.ok(row2.steps.some((s) => s.key === 'ransomware:attack-mitigation'));
   } finally { await cleanup(); }
 });

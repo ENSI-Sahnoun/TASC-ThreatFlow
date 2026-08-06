@@ -9,6 +9,7 @@ const { scoreRelevance } = require('./relevance_score');
 const { buildConsequence } = require('./consequence');
 const { buildPlaybook } = require('./playbook');
 const { buildCategoryPlaybook } = require('./playbooks');
+const { buildAttackMitigationsMap } = require('./playbooks/attack-mitigations');
 const { getProfile } = require('./profiles');
 
 // 7 params per row; Postgres caps a statement at 65535 bind parameters, so 1000 rows (7000
@@ -97,6 +98,10 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
   if (!profile) return null;
 
   const items = await assembleItems(store);
+  // Loaded once per recompute call, not per item -- same reasoning as the rest of this file's
+  // "no per-item query" discipline. A stale or empty table just means attackStep() returns null
+  // for everything, identical to the old curated-file "no match" behavior.
+  const attackMitigations = buildAttackMitigationsMap(await store.all('SELECT * FROM attack_mitigations'));
   const tiers = { act_now: 0, watch: 0, low: 0, not_yours: 0 };
   const values = [];
   const playbookValues = [];
@@ -153,6 +158,7 @@ async function recomputeProfile(store, profileId, { now = new Date() } = {}) {
           actors: item.actors,
           families: item.families,
           iocs: item.iocs,
+          attackMitigations,
         });
       }
 

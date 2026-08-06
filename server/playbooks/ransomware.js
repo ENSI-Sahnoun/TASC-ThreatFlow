@@ -24,16 +24,19 @@ function confirmStep(title, actors) {
   };
 }
 
-function attackMitigationStep(actors) {
+function attackMitigationStep(actors, attackMitigations) {
   for (const name of actors || []) {
-    const mitigations = attackStep(name);
-    if (mitigations) {
-      const list = mitigations.map((m) => `${m.name} (${m.id})`).join(', ');
+    const mitigations = attackStep(name, 'actor', attackMitigations);
+    if (mitigations && mitigations.length) {
+      const list = mitigations
+        .map((m) => `${m.name} (${m.id}, addresses ${m.techniqueCount} technique${m.techniqueCount === 1 ? '' : 's'})`)
+        .join(', ');
+      const syncedAt = mitigations[0].syncedAt;
       return {
         key: 'ransomware:attack-mitigation',
         title: `Known mitigations for ${name}`,
         detail: `Recommended ATT&CK mitigations for ${name}: ${list}`,
-        source: 'data/attack-mitigations.json',
+        source: `MITRE ATT&CK (attack_mitigations table${syncedAt ? `, synced ${syncedAt}` : ''})`,
         link: mitigations[0].url,
       };
     }
@@ -81,10 +84,10 @@ function paymentDecisionStep() {
   };
 }
 
-function buildRansomwarePlaybook({ title = null, actors = [], iocs = [] } = {}) {
+function buildRansomwarePlaybook({ title = null, actors = [], iocs = [], attackMitigations = new Map() } = {}) {
   const steps = [confirmStep(title, actors)];
 
-  const attackMit = attackMitigationStep(actors);
+  const attackMit = attackMitigationStep(actors, attackMitigations);
   if (attackMit) steps.push(attackMit);
 
   if ((iocs || []).length > 0) steps.push(blockIocsStep(iocs));

@@ -998,6 +998,9 @@ test('GET /api/items/:id builds a ransomware playbook with victim, attack-mitiga
       category: 'ransomware', title: 'Acme Corp (LockBit)',
       actors: ['LockBit'], iocs: [{ type: 'ip', value: '203.0.113.5' }],
     });
+    await store.run(
+      `INSERT INTO attack_mitigations (subject_type, subject_name, mitigation_id, mitigation_name, mitigation_url, technique_count, synced_at)
+       VALUES ('actor','LockBit','M1053','Data Backup','https://attack.mitre.org/mitigations/M1053/',7, now())`);
     const res = await recomputeAndFetch(app, store, itemId, 'ransomware');
     assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
       'ransomware:confirm', 'ransomware:attack-mitigation', 'ransomware:block-iocs',
@@ -1028,6 +1031,9 @@ test('GET /api/items/:id builds a malware playbook with an ATT&CK mitigation for
     const itemId = await seedCategoryItem(store, {
       category: 'malware', families: ['Emotet'], iocs: [{ type: 'sha256', value: 'a'.repeat(64) }],
     });
+    await store.run(
+      `INSERT INTO attack_mitigations (subject_type, subject_name, mitigation_id, mitigation_name, mitigation_url, technique_count, synced_at)
+       VALUES ('family','Emotet','M1049','Antivirus/Antimalware','https://attack.mitre.org/mitigations/M1049/',4, now())`);
     const res = await recomputeAndFetch(app, store, itemId, 'malware');
     assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
       'malware:confirm', 'malware:attack-mitigation', 'malware:block-iocs', 'malware:isolate-if-found',
@@ -1066,6 +1072,9 @@ test('GET /api/items/:id builds an ioc playbook once indicators exist', async ()
     const itemId = await seedCategoryItem(store, {
       category: 'ioc', domain: 'malware', families: ['Mirai'], iocs: [{ type: 'ip', value: '198.51.100.9' }],
     });
+    await store.run(
+      `INSERT INTO attack_mitigations (subject_type, subject_name, mitigation_id, mitigation_name, mitigation_url, technique_count, synced_at)
+       VALUES ('family','Mirai','M1030','Network Segmentation','https://attack.mitre.org/mitigations/M1030/',6, now())`);
     const res = await recomputeAndFetch(app, store, itemId, 'malware');
     assert.deepStrictEqual(res.body.playbook.steps.map((s) => s.key), [
       'ioc:block-iocs', 'ioc:attack-mitigation', 'ioc:watch-reoccurrence',

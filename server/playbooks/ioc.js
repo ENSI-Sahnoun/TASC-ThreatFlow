@@ -13,16 +13,19 @@ function blockIocsStep(iocs) {
   };
 }
 
-function attackMitigationStep(families) {
+function attackMitigationStep(families, attackMitigations) {
   for (const name of families || []) {
-    const mitigations = attackStep(name);
-    if (mitigations) {
-      const list = mitigations.map((m) => `${m.name} (${m.id})`).join(', ');
+    const mitigations = attackStep(name, 'family', attackMitigations);
+    if (mitigations && mitigations.length) {
+      const list = mitigations
+        .map((m) => `${m.name} (${m.id}, addresses ${m.techniqueCount} technique${m.techniqueCount === 1 ? '' : 's'})`)
+        .join(', ');
+      const syncedAt = mitigations[0].syncedAt;
       return {
         key: 'ioc:attack-mitigation',
         title: `Known mitigations for ${name}`,
         detail: `Recommended ATT&CK mitigations for ${name}: ${list}`,
-        source: 'data/attack-mitigations.json',
+        source: `MITRE ATT&CK (attack_mitigations table${syncedAt ? `, synced ${syncedAt}` : ''})`,
         link: mitigations[0].url,
       };
     }
@@ -40,12 +43,12 @@ function watchReoccurrenceStep() {
   };
 }
 
-function buildIocPlaybook({ families = [], iocs = [] } = {}) {
+function buildIocPlaybook({ families = [], iocs = [], attackMitigations = new Map() } = {}) {
   if (!iocs || iocs.length === 0) return null;
 
   const steps = [blockIocsStep(iocs)];
 
-  const attackMit = attackMitigationStep(families);
+  const attackMit = attackMitigationStep(families, attackMitigations);
   if (attackMit) steps.push(attackMit);
 
   steps.push(watchReoccurrenceStep());
