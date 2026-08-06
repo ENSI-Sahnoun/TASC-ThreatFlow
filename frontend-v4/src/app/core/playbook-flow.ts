@@ -59,3 +59,107 @@ export function resolveFlow(template: FlowNode[], playbook: Playbook | null | un
     return node;
   });
 }
+
+// ---- vertical layout math ----
+
+export const FLOW_CENTER_X = 180;
+const FLOW_PILL_WIDTH = 160;
+const FLOW_PILL_HEIGHT = 30;
+const FLOW_ACTION_WIDTH = 220;
+const FLOW_ACTION_HEIGHT = 48;
+const FLOW_DIAMOND_WIDTH = 140;
+const FLOW_DIAMOND_HEIGHT = 92;
+const FLOW_GAP = 26;
+const FLOW_RAIL_OFFSET = 150;
+const FLOW_TOP_MARGIN = 10;
+
+export interface PositionedFlowNode {
+  node: ResolvedFlowNode;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface FlowEdge {
+  key: string;
+  x1: number; y1: number;
+  x2: number; y2: number;
+  dashed: boolean;
+  label: string | null;
+}
+
+export interface FlowLayout {
+  width: number;
+  height: number;
+  nodes: PositionedFlowNode[];
+  edges: FlowEdge[];
+}
+
+function nodeSize(node: ResolvedFlowNode): { width: number; height: number } {
+  if (node.type === 'decision') return { width: FLOW_DIAMOND_WIDTH, height: FLOW_DIAMOND_HEIGHT };
+  if (node.type === 'action') return { width: FLOW_ACTION_WIDTH, height: FLOW_ACTION_HEIGHT };
+  return { width: FLOW_PILL_WIDTH, height: FLOW_PILL_HEIGHT };
+}
+
+function solidEdge(a: PositionedFlowNode, b: PositionedFlowNode, label: string | null = null): FlowEdge {
+  return {
+    key: `${a.node.key}-${b.node.key}`,
+    x1: a.x + a.width / 2, y1: a.y + a.height,
+    x2: b.x + b.width / 2, y2: b.y,
+    dashed: false,
+    label,
+  };
+}
+
+// Rail routes a skipped decision's "no" branch around its (unrendered-with-edges) gated action
+// box: out from the diamond's right edge, down to the merge target's top, back in to its
+// top-center. Three segments so the component can draw each leg as its own dashed <line>.
+function railEdges(decision: PositionedFlowNode, after: PositionedFlowNode): FlowEdge[] {
+  const railX = FLOW_CENTER_X + FLOW_RAIL_OFFSET;
+  const midY = decision.y + decision.height / 2;
+  const mergeY = after.y;
+  const base = decision.node.key;
+  return [
+    { key: `${base}-rail-out`, x1: decision.x + decision.width, y1: midY, x2: railX, y2: midY, dashed: true, label: 'no' },
+    { key: `${base}-rail-down`, x1: railX, y1: midY, x2: railX, y2: mergeY, dashed: true, label: null },
+    { key: `${base}-rail-in`, x1: railX, y1: mergeY, x2: after.x + after.width / 2, y2: mergeY, dashed: true, label: null },
+  ];
+}
+
+export function layoutFlow(resolved: ResolvedFlowNode[]): FlowLayout {
+  const nodes: PositionedFlowNode[] = [];
+  let cursorY = FLOW_TOP_MARGIN;
+  for (const node of resolved) {
+    const { width, height } = nodeSize(node);
+    nodes.push({ node, x: FLOW_CENTER_X - width / 2, y: cursorY, width, height });
+    cursorY += height + FLOW_GAP;
+  }
+
+  const edges: FlowEdge[] = [];
+  let i = 0;
+  while (i < nodes.length - 1) {
+    const cur = nodes[i];
+    if (cur.node.type === 'decision') {
+      const action = nodes[i + 1];
+      const after = nodes[i + 2];
+      if (cur.node.taken) {
+        edges.push(solidEdge(cur, action, 'yes'));
+        i += 1;
+      } else {
+        edges.push(...railEdges(cur, after));
+        i += 2;
+      }
+      continue;
+    }
+    edges.push(solidEdge(cur, nodes[i + 1]));
+    i += 1;
+  }
+
+  return {
+    width: FLOW_CENTER_X + FLOW_RAIL_OFFSET + 40,
+    height: cursorY - FLOW_GAP + FLOW_TOP_MARGIN,
+    nodes,
+    edges,
+  };
+}

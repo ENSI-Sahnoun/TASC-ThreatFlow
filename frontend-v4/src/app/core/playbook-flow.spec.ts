@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FLOW_TEMPLATES, hasFlow, resolveFlow } from './playbook-flow';
+import { FLOW_TEMPLATES, hasFlow, resolveFlow, layoutFlow } from './playbook-flow';
 import type { Playbook, PlaybookStep } from './models';
 
 const step = (key: string): PlaybookStep => ({ key, title: 't', detail: 'd', source: 's', link: null });
@@ -74,5 +74,50 @@ describe('resolveFlow (phishing)', () => {
     const resolved = resolveFlow(template, null);
     expect(resolved[0]).toEqual(template[0]);
     expect(resolved.every((n) => n.type !== 'action' || n.resolved === false)).toBe(true);
+  });
+});
+
+describe('layoutFlow', () => {
+  it('positions one row per template node, all sharing the same width center', () => {
+    const template = FLOW_TEMPLATES['phishing'];
+    const pb: Playbook = {
+      steps: [
+        step('phishing:confirm'), step('phishing:block-iocs'),
+        step('phishing:report-phishing-url'), step('phishing:check-clicked'),
+      ],
+      done: [],
+    };
+    const layout = layoutFlow(resolveFlow(template, pb));
+
+    expect(layout.nodes).toHaveLength(template.length);
+    // No two nodes may overlap vertically: each node's y must be >= the previous node's bottom.
+    for (let i = 1; i < layout.nodes.length; i++) {
+      expect(layout.nodes[i].y).toBeGreaterThanOrEqual(layout.nodes[i - 1].y + layout.nodes[i - 1].height);
+    }
+    expect(layout.height).toBeGreaterThan(0);
+  });
+
+  it('draws no rail edges when every decision is taken', () => {
+    const pb: Playbook = {
+      steps: [
+        step('phishing:confirm'), step('phishing:block-iocs'),
+        step('phishing:report-phishing-url'), step('phishing:check-clicked'),
+      ],
+      done: [],
+    };
+    const layout = layoutFlow(resolveFlow(FLOW_TEMPLATES['phishing'], pb));
+    expect(layout.edges.some((e) => e.dashed)).toBe(false);
+  });
+
+  it('draws a 3-segment dashed rail around a skipped action, and gives the skipped box no edges', () => {
+    const pb: Playbook = { steps: [step('phishing:confirm'), step('phishing:check-clicked')], done: [] };
+    const layout = layoutFlow(resolveFlow(FLOW_TEMPLATES['phishing'], pb));
+
+    const railEdges = layout.edges.filter((e) => e.dashed);
+    // Two skipped decisions (has-indicators, has-url) x 3 rail segments each.
+    expect(railEdges).toHaveLength(6);
+
+    const blockIocsKey = 'phishing:block-iocs';
+    expect(layout.edges.some((e) => e.key.includes(blockIocsKey))).toBe(false);
   });
 });
