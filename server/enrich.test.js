@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { enrichItem, extractCves, extractIocs } = require('./enrich');
+const { enrichItem, extractCves, extractIocs, matchDictionary } = require('./enrich');
 const { normalizedItem } = require('./adapters/shape');
 
 test('extractCves finds CVE ids case-insensitively', () => {
@@ -85,4 +85,25 @@ test('enrichItem derives severity with v2 bands when the version says v2', () =>
 test('enrichItem defaults cvssVersion to null', () => {
   const enr = enrichItem({ category: 'news', title: 'x', summary: '', native: {} });
   assert.strictEqual(enr.cvssVersion, null);
+});
+
+test('matchDictionary matches only whole words, not substrings', () => {
+  const list = [{ name: 'AT', aliases: [] }, { name: 'REG', aliases: [] }];
+  // Real LOTL-tool false-positive shape: 'at' is a genuine substring of 'attack', 'reg' is a
+  // genuine substring of 'register'.
+  assert.deepStrictEqual(matchDictionary('the attacker gained control', list), []);
+  assert.deepStrictEqual(matchDictionary('please register your device', list), []);
+  assert.deepStrictEqual(matchDictionary('run reg.exe to view the registry', list), ['REG']);
+  assert.deepStrictEqual(matchDictionary('AT was used for persistence', list), ['AT']);
+});
+
+test('matchDictionary is case-insensitive and still respects word boundaries', () => {
+  const list = [{ name: 'Empire', aliases: ['PS Empire'] }];
+  assert.deepStrictEqual(matchDictionary('the EMPIRE C2 framework', list), ['Empire']);
+  assert.deepStrictEqual(matchDictionary('empirestate building', list), []);
+});
+
+test('matchDictionary matches a multi-word alias as a phrase', () => {
+  const list = [{ name: 'Empire', aliases: ['PS Empire'] }];
+  assert.deepStrictEqual(matchDictionary('deployed via PS Empire', list), ['Empire']);
 });

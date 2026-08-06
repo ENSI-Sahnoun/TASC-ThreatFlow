@@ -35,12 +35,21 @@ function extractIocs(text) {
   return iocs;
 }
 
+// Word-boundary matching, not substring. ATT&CK's real catalogue includes living-off-the-land
+// tool names (at, cmd, reg, sc, wmic, certutil, netsh) and group/malware names that double as
+// ordinary English words (Empire) -- .includes() would substring-match those into unrelated
+// text on nearly every item. This is a real fix against today's 10+10 dictionary too, just
+// invisible until now because none of those 20 names happen to be substrings of common words.
+function nameRegex(name) {
+  return new RegExp(`\\b${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+}
+
 function matchDictionary(text, list) {
-  const s = String(text || '').toLowerCase();
+  const s = String(text || '');
   const hits = [];
   for (const entry of list) {
     const names = [entry.name, ...(entry.aliases || [])];
-    if (names.some((n) => s.includes(n.toLowerCase()))) hits.push(entry.name);
+    if (names.some((n) => nameRegex(n).test(s))) hits.push(entry.name);
   }
   return hits;
 }
